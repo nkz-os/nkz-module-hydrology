@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hydrology-worker
+  namespace: nekazari
+  labels:
+    app: hydrology-worker
+    component: worker
+    module: hydrology
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hydrology-worker
+  template:
+    metadata:
+      labels:
+        app: hydrology-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/nkz-os/nkz-module-hydrology/backend@sha256:REPLACE_VIA_GITOPS
+          imagePullPolicy: IfNotPresent
+          command:
+            - rq
+            - worker
+            - hydrology-processing
+            - "--url"
+            - "$(REDIS_URL)"
+          env:
+            - name: REDIS_URL
+              value: "redis://redis-service:6379/0"
+            - name: ORION_LD_URL
+              value: "http://orion-ld-service:1026"
+            - name: INTERNAL_SERVICE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: internal-service-secret
+                  key: secret
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
