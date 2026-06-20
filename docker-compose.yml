@@ -23,7 +23,7 @@ services:
     environment:
       - APP_NAME=NKZ Water Studio
       - DEBUG=true
-      - API_PREFIX=/api/hydrology
+      - API_PREFIX=/api/v1/hydrology
       - KEYCLOAK_URL=https://auth.example.com/auth
       - KEYCLOAK_REALM=nekazari
       - JWT_AUDIENCE=account
