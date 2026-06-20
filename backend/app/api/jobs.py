@@ -1,36 +1,36 @@
 """
 NKZ Water Studio — Job Management Router
 
-Background job lifecycle via RQ (Redis Queue).
+Polls RQ job status for hydrology analysis jobs.
 """
 
-from fastapi import APIRouter, Depends
-
-from app.middleware import TokenPayload, get_current_user, get_tenant_id
+from fastapi import APIRouter, HTTPException
+from redis import Redis
+from rq.job import Job as RQJob
+from app.config import get_settings
 
 router = APIRouter(prefix="/jobs", tags=["Job Management"])
 
 
-@router.get("/health")
-async def jobs_health():
-    """Jobs sub-router health check."""
-    return {"status": "jobs_ok"}
-
-
-@router.get("/")
-async def list_jobs(
-    tenant_id: str = Depends(get_tenant_id),
-    user: TokenPayload = Depends(get_current_user),
-):
-    """List background jobs for the current tenant."""
-    return {"jobs": [], "message": "list endpoint — not yet implemented"}
-
-
 @router.get("/{job_id}")
-async def get_job(
-    job_id: str,
-    tenant_id: str = Depends(get_tenant_id),
-    user: TokenPayload = Depends(get_current_user),
-):
-    """Get a single job's status and result."""
-    return {"job_id": job_id, "status": "pending", "message": "not yet implemented"}
+async def get_job_status(job_id: str):
+    """Get the status and result of a background job."""
+    _settings = get_settings()
+    _redis = Redis.from_url(_settings.redis_url)
+
+    try:
+        job = RQJob.fetch(job_id, connection=_redis)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    result = {
+        "job_id": job_id,
+        "status": job.get_status(),
+        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "ended_at": job.ended_at.isoformat() if job.ended_at else None,
+    }
+    if job.is_failed:
+        result["error"] = str(job.exc_info)
+    elif job.is_finished:
+        result["result"] = job.result
+    return result
