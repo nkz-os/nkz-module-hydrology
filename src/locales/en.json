@@ -1,0 +1,15 @@
+{
+  "module": {
+    "title": "NKZ Water Studio",
+    "tenant": "Tenant",
+    "notAuthenticated": "Not authenticated.",
+    "placeholder": "Replace this page with your module's main UI."
+  },
+  "slot": {
+    "authRequired": "Authentication required.",
+    "refreshAria": "Refresh",
+    "entity": "Entity:",
+    "user": "User:",
+    "placeholder": "Replace this component with your module's functionality."
+  }
+}

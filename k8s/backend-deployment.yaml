@@ -1,0 +1,125 @@
+# =============================================================================
+# NKZ Water Studio Backend Deployment
+# =============================================================================
+# Backend API service for NKZ Water Studio module
+# =============================================================================
+
+---
+# Deployment: NKZ Water Studio Backend Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hydrology-backend
+  namespace: nekazari
+  labels:
+    app: hydrology-backend
+    component: backend
+    module: hydrology
+    nekazari.io/profile: addon
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hydrology-backend
+  template:
+    metadata:
+      labels:
+        app: hydrology-backend
+        component: backend
+        module: hydrology
+    spec:
+      imagePullSecrets:
+        - name: ghcr-secret
+      containers:
+        - name: backend
+          image: ghcr.io/nkz-os/hydrology-backend:v1.0.0
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: APP_NAME
+              value: "NKZ Water Studio"
+            - name: DEBUG
+              value: "false"
+            - name: API_PREFIX
+              value: "/api/v1/hydrology"
+            # CORS — explicit origin whitelist (never *)
+            - name: CORS_ORIGINS
+              value: '["https://your-frontend-domain"]'
+            # Keycloak Configuration
+            - name: KEYCLOAK_URL
+              value: "https://auth.your-domain/auth"  # Override per environment
+            - name: KEYCLOAK_REALM
+              value: "nekazari"
+            - name: JWT_AUDIENCE
+              value: "account"
+            # Service-to-service auth (optional)
+            - name: MODULE_MANAGEMENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: module-secrets
+                  key: management-key
+                  optional: true
+            # Redis / RQ
+            - name: REDIS_URL
+              value: "redis://redis-service:6379/0"
+            # MinIO / S3
+            - name: MINIO_ENDPOINT
+              value: "http://minio-service:9000"
+            - name: MINIO_BUCKET
+              value: "nkz-hydrology"
+            # Hydrology-specific
+            - name: OPENMETEO_CACHE_TTL_DAYS
+              value: "1"
+            - name: DEM_MAX_SIZE_MB
+              value: "50"
+            - name: WORKER_TIMEOUT
+              value: "600"
+          # Database (if needed - uncomment and configure)
+          # - name: DATABASE_URL
+          #   valueFrom:
+          #     secretKeyRef:
+          #       name: postgresql-secret
+          #       key: connection-string
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "100m"
+            limits:
+              memory: "256Mi"
+              cpu: "200m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+
+---
+# Service: NKZ Water Studio Backend API
+apiVersion: v1
+kind: Service
+metadata:
+  name: hydrology-api-service
+  namespace: nekazari
+  labels:
+    app: hydrology-backend
+    module: hydrology
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8000
+      targetPort: 8000
+      protocol: TCP
+      name: http
+  selector:
+    app: hydrology-backend
