@@ -35,7 +35,7 @@ class TestAPI:
         """Test OpenAPI docs are available."""
         response = client.get("/api/v1/hydrology/docs")
         # Should return HTML or redirect
-        assert response.status_code in [200, 307]
+        assert response.status_code == 200
     
     def test_openapi_schema(self, client):
         """Test OpenAPI schema is generated."""
@@ -50,4 +50,4 @@ class TestAPI:
         """Test that list endpoint requires authentication."""
         response = client.get("/api/v1/hydrology/data")
         # Should return 403 (no auth) or require token
-        assert response.status_code in [401, 403]
+        assert response.status_code == 401

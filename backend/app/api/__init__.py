@@ -5,6 +5,7 @@ Module-specific routers for hydrology analysis, background jobs,
 and parcel setup lifecycle.
 """
 
+import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel, Field
@@ -147,7 +148,6 @@ async def create_data(
     
     The item ID is auto-generated.
     """
-    import uuid
     
     store = _get_tenant_store(tenant_id)
     

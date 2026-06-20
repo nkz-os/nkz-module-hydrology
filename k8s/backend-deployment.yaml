@@ -28,11 +28,8 @@ spec:
         component: backend
         module: hydrology
     spec:
-      imagePullSecrets:
-        - name: ghcr-secret
-      containers:
         - name: backend
-          image: ghcr.io/nkz-os/hydrology-backend:v1.0.0
+          image: ghcr.io/nkz-os/nkz-module-hydrology/backend@sha256:REPLACE_VIA_GITOPS
           imagePullPolicy: Always
           ports:
             - name: http

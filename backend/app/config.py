@@ -67,10 +67,7 @@ class Settings(BaseSettings):
         """Get the JWKS URL for token verification."""
         return f"{self.jwt_issuer_url}/protocol/openid-connect/certs"
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
 @lru_cache()

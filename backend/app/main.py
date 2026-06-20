@@ -50,7 +50,9 @@ def create_app() -> FastAPI:
     )
     
     # Health check (at root for k8s probes)
+    # @limiter.exempt prevents CrashLoopBackOff if rate limiter is added later
     @app.get("/health")
+    # @limiter.exempt
     async def health_check():
         """Health check endpoint for Kubernetes probes."""
         return {
