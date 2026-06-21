@@ -25,6 +25,7 @@ numpy>=1.24.0
 
 # Platform SDK
 nkz-platform-sdk>=0.4.1
+minio>=7.2.0
 
 # Geo / WASM
 geolibre-wasm>=0.4.4

@@ -2,11 +2,12 @@
 NKZ Water Studio — RQ Worker
 
 RQ worker entry point for the DEM pipeline. Uses GeoLibreEngine to run
-fill, flow accumulation, stream extraction, slope, aspect, and TWI.
+breach, flow accumulation, stream extraction + vectorization, slope, aspect,
+and TWI.
 
-NOTE (geolibre-wasm 0.4.4): raster_streams_to_vector is skipped due to
-d8_pointer crash. The pipeline uses run_dem_pipeline() which has this
-workaround built in.
+NOTE (geolibre-wasm 0.4.4): the standalone D8 tools trap, so the engine derives
+the D8 pointer in numpy (see GeoLibreEngine docstring). Stream vectorization is
+fully functional via that workaround — nothing is skipped.
 """
 
 import json
@@ -65,9 +66,11 @@ def _synthetic_dem() -> bytes:
     import tempfile
     from rasterio.transform import from_origin
 
+    # V-shaped valley (along j) plus a downslope (along i) so flow stays
+    # connected and accumulation does not collapse.
     size = 200
     dem = np.fromfunction(
-        lambda i, j: 100 + abs(j - size // 2) * 0.5,
+        lambda i, j: 100 + abs(j - size // 2) * 0.5 + i * 0.5,
         (size, size), dtype=np.float32
     )
     np.random.seed(42)

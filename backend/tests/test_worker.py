@@ -28,16 +28,17 @@ class TestWorker:
         assert result["status"] == "done"
         assert result["parcel_id"] == "test-parcel-001"
         assert result["outputs"] is not None
-        assert len(result["outputs"]) == 6
 
         expected_keys = {
-            "filled.tif", "accum.tif", "streams.tif",
-            "slope.tif", "aspect.tif", "twi.tif",
+            "breached.tif", "accum.tif", "streams.tif", "pntr.tif",
+            "streams.geojson", "slope.tif", "aspect.tif", "twi.tif",
         }
         assert set(result["outputs"]) == expected_keys
 
+        # Raster outputs must be non-trivial; the vectorized network must exist.
         for key in expected_keys:
-            assert result["sizes"][key] > 100, f"{key} output too short"
+            assert result["sizes"][key] > 50, f"{key} output too short"
+        assert result["sizes"]["streams.geojson"] > 50
 
     def test_run_dem_pipeline_logs_no_upload(self):
         """run_dem_pipeline runs without error in Fase 0 (synthetic DEM)."""

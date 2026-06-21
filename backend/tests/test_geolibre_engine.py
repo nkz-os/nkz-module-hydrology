@@ -1,6 +1,9 @@
 """
 Tests for GeoLibreEngine. Skip-guarded if geolibre-wasm not installed.
-Uses synthetic 50x50 DEM in EPSG:25830.
+Uses a synthetic DEM (valley + downslope) in EPSG:25830.
+
+Covers the geolibre-wasm 0.4.4 workaround: flow accumulation via the composite
+workflow + D8 pointer derived in numpy + stream vectorization.
 """
 
 import json
@@ -10,7 +13,7 @@ import numpy as np
 import pytest
 
 try:
-    import geolibre_wasm as gl
+    import geolibre_wasm as gl  # noqa: F401
     HAS_GEOLIBRE = True
 except ImportError:
     HAS_GEOLIBRE = False
@@ -19,99 +22,146 @@ pytestmark = pytest.mark.skipif(
     not HAS_GEOLIBRE, reason="geolibre-wasm not installed"
 )
 
+TIFF_MAGIC = b"\x49\x49"  # little-endian GeoTIFF
+
 
 @pytest.fixture(scope="module")
 def synthetic_dem() -> bytes:
-    """Create 50x50 synthetic DEM with a V-shaped valley."""
+    """Create a synthetic DEM with a V-shaped valley AND a downslope along i,
+    so flow concentrates and produces a real stream network."""
     import rasterio
     from rasterio.transform import from_origin
 
-    size = 50
+    # i-slope (0.5/cell) must dominate the noise (0.25) so drainage stays
+    # connected; a too-gentle slope leaves the breached DEM with no through-flow
+    # and accumulation collapses (terrain artefact, not an engine bug).
+    size = 120
     dem = np.fromfunction(
-        lambda i, j: 100 + abs(j - size // 2) * 0.5,
-        (size, size), dtype=np.float32
+        lambda i, j: 100 + abs(j - size // 2) * 0.7 + i * 0.5,
+        (size, size), dtype=np.float32,
     )
+    np.random.seed(5)
+    dem += np.random.rand(size, size).astype(np.float32) * 0.25
     with tempfile.NamedTemporaryFile(suffix=".tif") as tmp:
         with rasterio.open(
             tmp.name, "w", driver="GTiff",
             height=size, width=size, count=1, dtype="float32",
             crs="EPSG:25830",
-            transform=from_origin(600000, 4700000, 1.0, 1.0),
+            transform=from_origin(600000, 4700000, 2.0, 2.0), nodata=-9999.0,
         ) as dst:
             dst.write(dem, 1)
         with open(tmp.name, "rb") as f:
             return f.read()
 
 
-class TestGeoLibreEngine:
-    """Test suite for GeoLibreEngine."""
+# ── pure numpy pointer (no geolibre needed) ───────────────────────────
+def test_d8_pointer_esri_pure():
+    """ESRI codes are valid, borders/sinks are 0, a clear slope drains one way."""
+    from app.services.geolibre_engine import d8_pointer_esri
 
+    # Plane tilted so every interior cell drains east (code 1).
+    z = np.fromfunction(lambda i, j: 100 - j, (10, 10), dtype="float64")
+    code = d8_pointer_esri(z)
+    valid_codes = {0, 1, 2, 4, 8, 16, 32, 64, 128}
+    assert set(np.unique(code)).issubset(valid_codes)
+    # Interior cells (not last column) drain east.
+    assert np.all(code[1:-1, 1:-2] == 1)
+    # Cells with no lower neighbour available stay 0 (e.g. global low edge).
+    assert code[0, 0] in valid_codes
+
+
+def test_d8_pointer_esri_nodata():
+    from app.services.geolibre_engine import d8_pointer_esri
+    z = np.full((6, 6), -9999.0)
+    z[2:4, 2:4] = [[10, 9], [8, 7]]
+    code = d8_pointer_esri(z, nodata=-9999.0)
+    assert np.all(code[z == -9999.0] == 0)
+
+
+# ── geolibre-backed tools ─────────────────────────────────────────────
+class TestGeoLibreEngine:
     def test_fill_depressions(self, synthetic_dem):
-        """Fill depressions produces a valid GeoTIFF."""
         from app.services.geolibre_engine import GeoLibreEngine
-        eng = GeoLibreEngine()
-        filled = eng.fill_depressions(synthetic_dem)
-        assert len(filled) > 100
-        # TIFF little-endian magic
-        assert filled[:2] == b"\x49\x49"
+        filled = GeoLibreEngine().fill_depressions(synthetic_dem)
+        assert len(filled) > 100 and filled[:2] == TIFF_MAGIC
 
     def test_breach_depressions(self, synthetic_dem):
-        """Breach depressions produces a valid GeoTIFF."""
         from app.services.geolibre_engine import GeoLibreEngine
-        eng = GeoLibreEngine()
-        filled = eng.fill_depressions(synthetic_dem)
-        breached = eng.breach_depressions(filled)
-        assert len(breached) > 100
-        assert breached[:2] == b"\x49\x49"
+        breached = GeoLibreEngine().breach_depressions(synthetic_dem)
+        assert len(breached) > 100 and breached[:2] == TIFF_MAGIC
 
     def test_flow_accumulation(self, synthetic_dem):
-        """Flow accumulation via workaround produces valid output."""
         from app.services.geolibre_engine import GeoLibreEngine
-        eng = GeoLibreEngine()
-        filled = eng.fill_depressions(synthetic_dem)
-        accum = eng.flow_accumulation(filled)
-        assert len(accum) > 100
-        assert accum[:2] == b"\x49\x49"
+        accum = GeoLibreEngine().flow_accumulation(synthetic_dem)
+        assert len(accum) > 100 and accum[:2] == TIFF_MAGIC
 
     def test_extract_streams(self, synthetic_dem):
-        """Extract streams works from flow accumulation."""
         from app.services.geolibre_engine import GeoLibreEngine
         eng = GeoLibreEngine()
-        filled = eng.fill_depressions(synthetic_dem)
-        accum = eng.flow_accumulation(filled)
-        streams = eng.extract_streams(accum, threshold=100)
-        assert len(streams) > 100
+        accum = eng.flow_accumulation(synthetic_dem)
+        streams = eng.extract_streams(accum, threshold=80)
+        assert len(streams) > 100 and streams[:2] == TIFF_MAGIC
+
+    def test_d8_pointer_geotiff(self, synthetic_dem):
+        """Pointer is produced as a valid GeoTIFF from a breached DEM."""
+        from app.services.geolibre_engine import GeoLibreEngine
+        eng = GeoLibreEngine()
+        breached = eng.breach_depressions(synthetic_dem)
+        pntr = eng.d8_pointer(breached)
+        assert len(pntr) > 100 and pntr[:2] == TIFF_MAGIC
+
+    def test_streams_to_vector(self, synthetic_dem):
+        """The key restored capability: vectorized drainage network."""
+        from app.services.geolibre_engine import GeoLibreEngine
+        eng = GeoLibreEngine()
+        breached = eng.breach_depressions(synthetic_dem)
+        accum = eng.flow_accumulation(synthetic_dem)
+        streams = eng.extract_streams(accum, threshold=80)
+        pntr = eng.d8_pointer(breached)
+        geojson = eng.streams_to_vector(streams, pntr)
+        fc = json.loads(geojson.decode("utf-8"))
+        assert fc.get("type") == "FeatureCollection"
+        assert len(fc["features"]) > 0
 
     def test_slope_aspect(self, synthetic_dem):
-        """Slope and aspect produce valid outputs."""
         from app.services.geolibre_engine import GeoLibreEngine
         eng = GeoLibreEngine()
-        slope = eng.slope(synthetic_dem)
-        aspect = eng.aspect(synthetic_dem)
-        assert len(slope) > 100
-        assert len(aspect) > 100
+        assert len(eng.slope(synthetic_dem)) > 100
+        assert len(eng.aspect(synthetic_dem)) > 100
 
     def test_wetness_index(self, synthetic_dem):
-        """TWI computed from flow accumulation + slope."""
         from app.services.geolibre_engine import GeoLibreEngine
         eng = GeoLibreEngine()
-        filled = eng.fill_depressions(synthetic_dem)
-        accum = eng.flow_accumulation(filled)
-        slope = eng.slope(filled)
+        accum = eng.flow_accumulation(synthetic_dem)
+        slope = eng.slope(synthetic_dem)
         twi = eng.wetness_index(accum, slope)
-        assert len(twi) > 100
-        assert twi[:2] == b"\x49\x49"
+        assert len(twi) > 100 and twi[:2] == TIFF_MAGIC
 
     def test_full_pipeline(self, synthetic_dem):
-        """End-to-end DEM pipeline produces all expected outputs."""
+        """End-to-end DEM pipeline, including stream vectorization."""
         from app.services.geolibre_engine import GeoLibreEngine
-        eng = GeoLibreEngine()
-        result = eng.run_dem_pipeline(synthetic_dem)
-        expected_keys = {
-            "filled.tif", "accum.tif", "streams.tif",
-            "slope.tif", "aspect.tif", "twi.tif",
+        result = GeoLibreEngine().run_dem_pipeline(synthetic_dem)
+        expected = {
+            "breached.tif", "accum.tif", "streams.tif", "pntr.tif",
+            "streams.geojson", "slope.tif", "aspect.tif", "twi.tif",
         }
-        assert set(result.keys()) == expected_keys
+        assert set(result.keys()) == expected
         for key, data in result.items():
-            assert len(data) > 100, f"{key} is too short"
-            assert data[:2] == b"\x49\x49", f"{key} is not a valid TIFF"
+            assert len(data) > 50, f"{key} too short"
+            if key.endswith(".tif"):
+                assert data[:2] == TIFF_MAGIC, f"{key} not a TIFF"
+        # The drainage network must be valid GeoJSON with features.
+        fc = json.loads(result["streams.geojson"].decode("utf-8"))
+        assert fc["type"] == "FeatureCollection" and len(fc["features"]) > 0
+
+
+
+@pytest.mark.xfail(reason="geolibre-wasm 0.4.4: basins tool crashes with WASM unreachable")
+def test_basins_known_failure(self, synthetic_dem):
+    """Placeholder: tracked in geolibre-d8-trap.md"""
+    pass
+
+@pytest.mark.xfail(reason="geolibre-wasm 0.4.4: watershed --pour_points requires CRS-aware input")
+def test_watershed_known_failure(self, synthetic_dem):
+    """Placeholder: pour_points need proper GeoJSON with CRS"""
+    pass

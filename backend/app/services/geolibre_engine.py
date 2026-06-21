@@ -3,19 +3,69 @@ GeoLibreEngine — thin wrapper around geolibre-wasm for NKZ Water Studio.
 
 Virtual I/O (bytes in, bytes out). No disk access.
 
-NOTE (geolibre-wasm 0.4.4 bug): d8_flow_accum, d8_pointer, fd8_flow_accum,
-dinf_flow_accum crash with WASM 'unreachable' on this synthetic DEM.
-Workaround: use flow_accum_full_workflow instead of d8_flow_accum.
-raster_streams_to_vector requires d8_pntr which depends on d8_pointer —
-this step is SKIPPED in Fase 0 pending a geolibre-wasm fix or version bump.
+WORKAROUND (geolibre-wasm 0.4.4): the standalone D8 tools
+(`d8_pointer`, `d8_flow_accum`, `fd8_flow_accum`, `dinf_flow_accum`) trap with
+a WASM 'unreachable' error on ANY DEM (verified, incl. breached). The composite
+`flow_accum_full_workflow` works (it breaches + computes pointer + accumulation
+in Rust), but 0.4.4 only materializes the accumulation output to a file — the
+flow-direction pointer stays as an in-memory handle with no CLI flag to dump it.
+
+Therefore:
+  - flow accumulation  -> `flow_accum_full_workflow` (Rust, fast)
+  - D8 flow pointer     -> `d8_pointer_esri()` derived in numpy from a breached
+                           DEM (vectorized, no Python loops)
+  - stream vectorization-> `raster_streams_to_vector` fed the numpy pointer
+
+TODO: remove `d8_pointer_esri` + restore the native `d8_pointer` once
+geolibre-wasm fixes the standalone D8 tools (tracked upstream). See
+internal-docs-local/issues/geolibre-d8-trap.md.
 """
 
 import logging
+import tempfile
 from typing import Optional
 
 import geolibre_wasm as gl
 
 logger = logging.getLogger(__name__)
+
+# ESRI D8 flow-direction encoding: E=1 SE=2 S=4 SW=8 W=16 NW=32 N=64 NE=128
+# Each tuple is (row offset, col offset, code).
+_ESRI_D8 = [
+    (0, 1, 1), (1, 1, 2), (1, 0, 4), (1, -1, 8),
+    (0, -1, 16), (-1, -1, 32), (-1, 0, 64), (-1, 1, 128),
+]
+
+
+def d8_pointer_esri(z, nodata: Optional[float] = None):
+    """ESRI-encoded D8 flow pointer from a depressionless (breached/filled) DEM.
+
+    Steepest-descent over the 8 neighbours, fully vectorized (no wrap-around at
+    borders). Sinks, border cells with no lower neighbour, and nodata cells get
+    code 0 (no flow). Drop-in replacement for the geolibre-wasm 0.4.4
+    `d8_pointer` tool, which traps. Returns a float32 ndarray of codes.
+    """
+    import numpy as np
+
+    z = z.astype("float64")
+    valid = np.ones(z.shape, dtype=bool)
+    if nodata is not None:
+        valid &= z != nodata
+
+    best = np.zeros(z.shape, dtype="float64")        # best positive drop so far
+    code = np.zeros(z.shape, dtype="float32")        # 0 = sink / edge / nodata
+    for di, dj, c in _ESRI_D8:
+        dist = (di * di + dj * dj) ** 0.5
+        nb = np.full(z.shape, np.nan)
+        si0, si1 = max(0, -di), z.shape[0] - max(0, di)
+        sj0, sj1 = max(0, -dj), z.shape[1] - max(0, dj)
+        nb[si0:si1, sj0:sj1] = z[si0 + di:si1 + di, sj0 + dj:sj1 + dj]
+        drop = (z - nb) / dist
+        m = valid & np.isfinite(drop) & (drop > best)
+        best[m] = drop[m]
+        code[m] = c
+    code[~valid] = 0
+    return code
 
 
 class GeoLibreError(Exception):
@@ -30,7 +80,10 @@ class GeoLibreEngine:
 
     def _run(self, tool_id: str, args: list[str],
              input_files: dict[str, bytes]) -> dict[str, bytes]:
-        result = gl.run_tool(tool_id, args=args, input=input_files)
+        try:
+            result = gl.run_tool(tool_id, args=args, input=input_files)
+        except Exception as exc:  # WASM traps surface as Python exceptions
+            raise GeoLibreError(tool_id, f"tool crashed: {exc}") from exc
         if result.exit_code != 0:
             raise GeoLibreError(tool_id, f"exit_code={result.exit_code}",
                                 stdout=str(result.stdout))
@@ -51,33 +104,74 @@ class GeoLibreEngine:
             {"dem.tif": dem})
         return files["breached.tif"]
 
-    # ── Flow accumulation (workaround for d8_* bug) ───────────────────
-    def flow_accumulation(self, dem: bytes) -> bytes:
-        """Full workflow: fill + flow accumulation in one step.
+    # ── Flow accumulation (composite workflow; standalone d8 is broken) ─
+    def flow_accumulation(self, dem: bytes, out_type: str = "cells") -> bytes:
+        """D8 flow accumulation via `flow_accum_full_workflow`.
 
-        NOTE: Uses flow_accum_full_workflow as workaround for d8_flow_accum
-        crash in geolibre-wasm 0.4.4. Replace with d8_flow_accum once fixed.
+        This composite tool breaches + computes pointer + accumulation in Rust
+        and is the ONLY working flow-accumulation path in geolibre-wasm 0.4.4
+        (the standalone `d8_flow_accum` traps). Only the accumulation raster is
+        returned to a file; the internal pointer is not exposed (see module
+        docstring) — use `d8_pointer()` for the pointer.
         """
         files = self._run("flow_accum_full_workflow",
-            ["--input=/work/dem.tif", "--output=/work/accum.tif", "--out_type=cells"],
+            ["--input_dem=/work/dem.tif", "--output=/work/accum.tif",
+             f"--out_type={out_type}"],
             {"dem.tif": dem})
         return files["accum.tif"]
 
-    # This method is a placeholder for when d8_pointer is fixed.
-    # def d8_pointer(self, dem: bytes) -> bytes: ...
+    # ── D8 pointer (numpy workaround for the broken native tool) ────────
+    def d8_pointer(self, breached_dem: bytes) -> bytes:
+        """ESRI D8 flow pointer as a GeoTIFF, derived in numpy.
+
+        Input MUST be a depressionless DEM (output of `breach_depressions` or
+        `fill_depressions`). Preserves the input's CRS/transform so the
+        vectorized streams are georeferenced. Workaround for the trapping
+        native `d8_pointer` (geolibre-wasm 0.4.4).
+        """
+        import numpy as np
+        import rasterio
+
+        with tempfile.NamedTemporaryFile(suffix=".tif") as tin:
+            tin.write(breached_dem)
+            tin.flush()
+            with rasterio.open(tin.name) as ds:
+                z = ds.read(1)
+                profile = ds.profile.copy()
+                nodata = ds.nodata
+
+        pointer = d8_pointer_esri(z, nodata=nodata)
+        profile.update(dtype="float32", count=1, nodata=0)
+        with tempfile.NamedTemporaryFile(suffix=".tif") as tout:
+            with rasterio.open(tout.name, "w", **profile) as dst:
+                dst.write(pointer.astype("float32"), 1)
+            with open(tout.name, "rb") as f:
+                return f.read()
 
     # ── Stream network ─────────────────────────────────────────────────
     def extract_streams(self, flow_accum: bytes, threshold: float = 1000.0) -> bytes:
-        """Extract stream network from flow accumulation raster."""
+        """Extract a stream raster from a flow-accumulation raster.
+
+        NOTE: the real parameter is `flow_accumulation` (NOT `input`).
+        """
         files = self._run("extract_streams",
-            ["--input=/work/accum.tif", "--output=/work/streams.tif",
+            ["--flow_accumulation=/work/accum.tif", "--output=/work/streams.tif",
              f"--threshold={threshold}"],
             {"accum.tif": flow_accum})
         return files["streams.tif"]
 
-    # raster_streams_to_vector is DEPENDENT on d8_pointer (crash bug).
-    # Not implemented in Fase 0. Use GDAL/python-based vectorization instead
-    # or wait for geolibre-wasm fix.
+    def streams_to_vector(self, streams: bytes, d8_pntr: bytes) -> bytes:
+        """Vectorize a stream raster to GeoJSON using an ESRI D8 pointer.
+
+        `d8_pntr` MUST be a real ESRI-encoded D8 pointer (from `d8_pointer()`);
+        feeding any other raster yields geometrically wrong output even though
+        the tool exits 0.
+        """
+        files = self._run("raster_streams_to_vector",
+            ["--streams=/work/streams.tif", "--d8_pntr=/work/pntr.tif",
+             "--output=/work/streams.geojson", "--esri_pntr"],
+            {"streams.tif": streams, "pntr.tif": d8_pntr})
+        return files["streams.geojson"]
 
     # ── Terrain derivatives ────────────────────────────────────────────
     def slope(self, dem: bytes, degrees: bool = True) -> bytes:
@@ -98,24 +192,44 @@ class GeoLibreEngine:
              "--output=/work/twi.tif"],
             {"sca.tif": sca, "slope.tif": slope_raster})["twi.tif"]
 
+    # ── Watershed / Basins ────────────────────────────────────────────
+    def watershed(self, dem: bytes, pour_points: Optional[bytes] = None) -> bytes:
+        """Delineate watershed from DEM with optional pour points."""
+        inp = {"dem.tif": dem}
+        args = ["--input=/work/dem.tif", "--output=/work/watershed.tif"]
+        if pour_points:
+            inp["points.shp"] = pour_points
+            args.append("--pour_points=/work/points.shp")
+        return self._run("watershed", args, inp)["watershed.tif"]
+
+    def basins(self, dem: bytes) -> bytes:
+        """Delineate drainage basins from DEM."""
+        return self._run("basins",
+            ["--input=/work/dem.tif", "--output=/work/basins.tif"],
+            {"dem.tif": dem})["basins.tif"]
+
     # ── Convenience pipeline ──────────────────────────────────────────
     def run_dem_pipeline(self, dem: bytes) -> dict[str, bytes]:
-        """Full DEM pipeline using verified working tools.
+        """Full DEM pipeline. Returns raster outputs + the vectorized drainage
+        network (streams.geojson).
 
-        Returns dict with keys: filled, accum, streams, slope, aspect, twi.
-        Note: stream vectorization (raster_streams_to_vector) is SKIPPED
-        due to d8_pointer crash in geolibre-wasm 0.4.4.
+        Stream vectorization is RESTORED via the numpy D8 pointer workaround;
+        it is no longer skipped.
         """
-        filled = self.fill_depressions(dem)
-        accum = self.flow_accumulation(filled)
+        breached = self.breach_depressions(dem)
+        accum = self.flow_accumulation(dem)            # composite (internal breach)
         streams = self.extract_streams(accum, threshold=1000)
-        slope = self.slope(filled)
-        aspect = self.aspect(filled)
+        pntr = self.d8_pointer(breached)               # numpy ESRI pointer
+        streams_vec = self.streams_to_vector(streams, pntr)
+        slope = self.slope(breached)
+        aspect = self.aspect(breached)
         twi = self.wetness_index(accum, slope)
         return {
-            "filled.tif": filled,
+            "breached.tif": breached,
             "accum.tif": accum,
             "streams.tif": streams,
+            "pntr.tif": pntr,
+            "streams.geojson": streams_vec,
             "slope.tif": slope,
             "aspect.tif": aspect,
             "twi.tif": twi,
