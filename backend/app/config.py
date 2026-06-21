@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     minio_access_key: str = ""
     minio_secret_key: str = ""
     minio_bucket: str = "nkz-hydrology"
+    minio_public_url: str = "https://minio.robotika.cloud"
     minio_region: str = "us-east-1"
 
     # Open-Meteo cache

@@ -156,12 +156,18 @@ class TestGeoLibreEngine:
 
 
 
-@pytest.mark.xfail(reason="geolibre-wasm 0.4.4: basins tool crashes with WASM unreachable")
-def test_basins_known_failure(self, synthetic_dem):
-    """Placeholder: tracked in geolibre-d8-trap.md"""
-    pass
-
-@pytest.mark.xfail(reason="geolibre-wasm 0.4.4: watershed --pour_points requires CRS-aware input")
-def test_watershed_known_failure(self, synthetic_dem):
-    """Placeholder: pour_points need proper GeoJSON with CRS"""
-    pass
+# ── Characterization of the geolibre-wasm 0.4.4 crash family ──────────
+# See internal-docs-local/issues/geolibre-d8-trap.md. `basins`/`subbasins`
+# trap with the same shared WASM error as the D8 tools. This xfails now and
+# will xpass once upstream fixes it; strict=True then fails the suite so we
+# remember to drop the numpy/watershed workarounds. `watershed` itself is NOT
+# broken (it just needs a vector pour-point file), so no xfail for it.
+@pytest.mark.xfail(strict=True,
+                   reason="geolibre-wasm 0.4.4: basins traps (wasm fn 7349)")
+def test_basins_traps(synthetic_dem):
+    from app.services.geolibre_engine import GeoLibreEngine
+    eng = GeoLibreEngine()
+    breached = eng.breach_depressions(synthetic_dem)
+    r = gl.run_tool("basins", args=["--input=/work/b.tif", "--output=/work/o.tif"],
+                    input={"b.tif": breached})
+    assert r.exit_code == 0  # unreachable in 0.4.4 — the tool traps first
