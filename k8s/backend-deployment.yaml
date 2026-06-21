@@ -33,7 +33,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: internal-service-secret
-                  key: secret
+                  key: INTERNAL_SERVICE_SECRET
           livenessProbe:
             httpGet:
               path: /health

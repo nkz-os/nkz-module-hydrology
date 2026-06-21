@@ -36,7 +36,7 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: internal-service-secret
-                  key: secret
+                  key: INTERNAL_SERVICE_SECRET
           resources:
             requests:
               memory: "1Gi"
