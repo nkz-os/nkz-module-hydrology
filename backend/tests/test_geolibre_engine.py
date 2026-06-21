@@ -171,3 +171,33 @@ def test_basins_traps(synthetic_dem):
     r = gl.run_tool("basins", args=["--input=/work/b.tif", "--output=/work/o.tif"],
                     input={"b.tif": breached})
     assert r.exit_code == 0  # unreachable in 0.4.4 — the tool traps first
+
+
+class TestCatchment:
+    """Catchment from point (numpy BFS, replaces broken basins)."""
+
+    def test_catchment_from_point(self, synthetic_dem):
+        from app.services.geolibre_engine import GeoLibreEngine
+        eng = GeoLibreEngine()
+        filled = eng.fill_depressions(synthetic_dem)
+        pntr = eng.d8_pointer(filled)
+        # Pour point at valley center
+        catch = eng.catchment_from_point(pntr, pour_col=25, pour_row=25)
+        assert len(catch) > 100
+        assert catch[:2] == b"\x49\x49"
+
+    def test_catchment_out_of_bounds(self, synthetic_dem):
+        from app.services.geolibre_engine import GeoLibreEngine
+        eng = GeoLibreEngine()
+        filled = eng.fill_depressions(synthetic_dem)
+        pntr = eng.d8_pointer(filled)
+        catch = eng.catchment_from_point(pntr, pour_col=-1, pour_row=-1)
+        assert len(catch) > 100
+
+    def test_denylist_blocks_broken_tools(self, synthetic_dem):
+        from app.services.geolibre_engine import GeoLibreEngine, GeoLibreError, _BROKEN_TOOLS
+        eng = GeoLibreEngine()
+        for tool_id in _BROKEN_TOOLS:
+            with pytest.raises(GeoLibreError) as exc:
+                eng._run(tool_id, [], {})
+            assert "BROKEN" in str(exc.value)

@@ -10,7 +10,6 @@ import logging
 from typing import Optional
 
 import boto3
-import geolibre_wasm as gl
 from botocore.config import Config as BotoConfig
 
 from app.config import get_settings
@@ -72,28 +71,10 @@ def generate_pmtiles(
     input_name = f"{raster_name}.tif"
     output_name = f"{raster_name}.pmtiles"
 
-    result = gl.run_tool(
-        "write_pmtiles",
-        args=[
-            f"--input=/work/{input_name}",
-            f"--output=/work/{output_name}",
-            f"--min_zoom={min_zoom}",
-            f"--max_zoom={max_zoom}",
-            f"--colormap={colormap}",
-        ],
-        input={input_name: raster_data},
-    )
-
-    if result.exit_code != 0:
-        raise RuntimeError(
-            f"write_pmtiles failed (exit={result.exit_code}): {result.stdout}"
-        )
-
-    pmtiles = result.files.get(output_name)
-    if not pmtiles:
-        raise RuntimeError(
-            f"write_pmtiles produced no output file '{output_name}'"
-        )
+    from app.services.geolibre_engine import GeoLibreEngine
+    engine = GeoLibreEngine()
+    pmtiles = engine.write_pmtiles(raster_data, colormap=colormap,
+                                    min_zoom=min_zoom, max_zoom=max_zoom)
 
     # Upload to MinIO
     key = _pmtiles_key(parcel_id, raster_name)

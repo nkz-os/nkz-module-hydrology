@@ -28,7 +28,7 @@ nkz-platform-sdk>=0.4.1
 minio>=7.2.0
 
 # Geo / WASM
-geolibre-wasm>=0.4.4
+geolibre-wasm==0.4.4  # pin: d8 tools crash in 0.4.4
 
 # Development
 black>=24.1.0

@@ -75,11 +75,33 @@ class GeoLibreError(Exception):
         super().__init__(f"[{tool_id}] {message}")
 
 
+# Denylist: tools that crash with WASM unreachable in geolibre-wasm 0.4.4.
+# Each maps to a clear error pointing to the workaround.
+_BROKEN_TOOLS: dict[str, str] = {
+    "d8_pointer": "crash in 0.4.4 — use engine.d8_pointer() (numpy workaround)",
+    "d8_flow_accum": "crash in 0.4.4 — use engine.flow_accumulation() (flow_accum_full_workflow)",
+    "fd8_flow_accum": "crash in 0.4.4 — use engine.flow_accumulation()",
+    "dinf_flow_accum": "crash in 0.4.4 — use engine.flow_accumulation()",
+    "basins": "crash in 0.4.4 — use engine.catchment_from_point() (numpy BFS)",
+    "subbasins": "crash in 0.4.4 — use engine.catchment_from_point()",
+}
+
+
 class GeoLibreEngine:
-    """Wraps gl.run_tool() for hydrology operations. I/O is virtual."""
+    """Wraps gl.run_tool() for hydrology operations. I/O is virtual.
+
+    ALL gl.run_tool() calls go through this class. No other module should
+    import geolibre_wasm or call gl.run_tool() directly.
+    """
 
     def _run(self, tool_id: str, args: list[str],
              input_files: dict[str, bytes]) -> dict[str, bytes]:
+        # Denylist check: reject known-broken tools with actionable message
+        if tool_id in _BROKEN_TOOLS:
+            raise GeoLibreError(
+                tool_id,
+                f"BROKEN in geolibre-wasm 0.4.4 — {_BROKEN_TOOLS[tool_id]}",
+            )
         try:
             result = gl.run_tool(tool_id, args=args, input=input_files)
         except Exception as exc:  # WASM traps surface as Python exceptions
@@ -191,6 +213,79 @@ class GeoLibreEngine:
             ["--sca=/work/sca.tif", "--slope=/work/slope.tif",
              "--output=/work/twi.tif"],
             {"sca.tif": sca, "slope.tif": slope_raster})["twi.tif"]
+
+    # ── PMTiles (moved here to keep all gl.run_tool in one file) ─────
+    def write_pmtiles(self, raster: bytes, colormap: str = "viridis",
+                       min_zoom: int = 10, max_zoom: int = 18) -> bytes:
+        """Convert a single-band raster to PMTiles archive."""
+        files = self._run("write_pmtiles", [
+            "--input=/work/raster.tif", "--output=/work/output.pmtiles",
+            f"--colormap={colormap}",
+            f"--min_zoom={min_zoom}", f"--max_zoom={max_zoom}",
+        ], {"raster.tif": raster})
+        return files["output.pmtiles"]
+
+    # ── Catchment from point (numpy BFS, avoids broken basins) ────────
+    def catchment_from_point(self, pointer_tif: bytes,
+                              pour_col: int, pour_row: int) -> bytes:
+        """Delineate upstream catchment from a pour point using D8 pointer.
+
+        Uses numpy BFS upstream: a cell belongs to the catchment if its
+        downslope neighbour (via D8 code) is already in the catchment.
+        Avoids the broken `basins`/`subbasins` geolibre tools.
+
+        Returns GeoTIFF bytes with 1=catchment, 0=outside.
+        """
+        import numpy as np
+        import rasterio
+
+        # D8 offsets + codes (ESRI encoding)
+        D8 = {
+            1: (0, 1), 2: (1, 1), 4: (1, 0), 8: (1, -1),
+            16: (0, -1), 32: (-1, -1), 64: (-1, 0), 128: (-1, 1),
+        }
+        # Reverse: for each cell, which neighbour flows INTO it
+        # A cell (r,c) is in the catchment if any downstream neighbour
+        # points to it. The neighbour's D8 code tells which direction.
+        # The REVERSE direction is the one pointing at (r,c).
+        REVERSE: dict[int, tuple[int, int]] = {
+            1: (0, -1), 2: (-1, -1), 4: (-1, 0), 8: (-1, 1),
+            16: (0, 1), 32: (1, 1), 64: (1, 0), 128: (1, -1),
+        }
+
+        with tempfile.NamedTemporaryFile(suffix=".tif") as tin:
+            tin.write(pointer_tif)
+            tin.flush()
+            with rasterio.open(tin.name) as ds:
+                pointer = ds.read(1)
+                profile = ds.profile.copy()
+
+        ny, nx = pointer.shape
+        catchment = np.zeros((ny, nx), dtype=np.uint8)
+
+        # BFS upstream from pour point
+        from collections import deque
+        q = deque()
+        if 0 <= pour_row < ny and 0 <= pour_col < nx:
+            catchment[pour_row, pour_col] = 1
+            q.append((pour_row, pour_col))
+
+        while q:
+            r, c = q.popleft()
+            # Check all 8 neighbours — if one points TO (r,c), it's upstream
+            for code, (dr, dc) in REVERSE.items():
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < ny and 0 <= nc < nx and catchment[nr, nc] == 0:
+                    if int(pointer[nr, nc]) == code:
+                        catchment[nr, nc] = 1
+                        q.append((nr, nc))
+
+        profile.update(dtype="uint8", count=1, nodata=0)
+        with tempfile.NamedTemporaryFile(suffix=".tif") as tout:
+            with rasterio.open(tout.name, "w", **profile) as dst:
+                dst.write(catchment, 1)
+            with open(tout.name, "rb") as f:
+                return f.read()
 
     # ── Watershed / Basins ────────────────────────────────────────────
     def watershed(self, dem: bytes, pour_points: Optional[bytes] = None) -> bytes:
