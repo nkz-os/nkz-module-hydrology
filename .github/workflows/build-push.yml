@@ -60,9 +60,10 @@ jobs:
             - name: Install backend dependencies
               run: pip install -r backend/requirements.txt
 
-            - name: Run backend tests
             - name: Check geolibre chokepoint
               run: bash scripts/check-geolibre-chokepoint.sh
+
+            - name: Run backend tests
               run: cd backend && python -m pytest tests/ -v
 
     # ==========================================================================
