@@ -33,3 +33,4 @@ geolibre-wasm>=0.4.4
 # Development
 black>=24.1.0
 ruff>=0.1.0
+h3>=4.0.0
