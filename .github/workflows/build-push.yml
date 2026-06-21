@@ -73,7 +73,7 @@ jobs:
         runs-on: ubuntu-latest
         needs: test
         # Enabled after placeholder replacement
-        if: false  # CHANGE TO true ONCE FRONTEND IS FULLY IMPLEMENTED
+        if: true  # frontend ready for publish
         steps:
             - uses: actions/checkout@v4
 
