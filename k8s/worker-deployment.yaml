@@ -27,9 +27,19 @@ spec:
             - hydrology-processing
             - "--url"
             - "$(REDIS_URL)"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
           env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
             - name: REDIS_URL
-              value: "redis://redis-service:6379/0"
+              value: "redis://:$(REDIS_PASSWORD)@redis-service:6379/0"
             - name: ORION_LD_URL
               value: "http://orion-ld-service:1026"
             - name: INTERNAL_SERVICE_SECRET
