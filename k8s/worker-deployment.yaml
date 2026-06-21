@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: ghcr.io/nkz-os/nkz-module-hydrology/backend@sha256:REPLACE_VIA_GITOPS
+          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend@sha256:f07e964f77f6ca1d8830eab5fe6946f3d5667b85ebd1b6851185fd09782f953a
           imagePullPolicy: IfNotPresent
           command:
             - rq
