@@ -30,8 +30,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-INTERNAL_SECRET = get_settings().internal_service_secret
-
 # Placeholder entities owned by hydrology (design spec §3.3)
 PLACEHOLDER_ENTITIES = [
     {"type": "AgriSoil", "id_suffix": "hydrology-profile"},
@@ -49,8 +47,9 @@ class SetupParcelRequest(BaseModel):
 @router.post("/setup-parcel", status_code=201)
 async def setup_parcel(request: Request, body: SetupParcelRequest):
     """Parcel activation lifecycle endpoint. Called by entity-manager."""
+    internal_secret = get_settings().internal_service_secret
     secret = request.headers.get("X-Internal-Service-Secret", "")
-    if not INTERNAL_SECRET or secret != INTERNAL_SECRET:
+    if not internal_secret or secret != internal_secret:
         logger.warning(
             "Unauthorized internal setup-parcel call from %s", request.client
         )
