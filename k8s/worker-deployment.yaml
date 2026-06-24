@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: worker
-          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend@sha256:75e149448d451ab321c55fa4d499337e0a5cee9ac27dd9e64fe959e7d1d0a6fa
+          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend@sha256:cf6ff1ab0d408b9f9a34763d09513796c866a2a078c18d238f11bcb13ffd49d7
           imagePullPolicy: IfNotPresent
           command: ["rq", "worker", "hydrology-processing", "--url", "$(REDIS_URL)"]
           envFrom:
