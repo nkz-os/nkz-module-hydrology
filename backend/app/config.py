@@ -20,11 +20,11 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1/hydrology"
     cors_origins: list[str] = []  # Set via CORS_ORIGINS env var; empty = deny all cross-origin
 
-    # Keycloak / JWT Authentication
-    keycloak_url: str = "https://auth.example.com/auth"  # Override via KEYCLOAK_URL
-    keycloak_realm: str = "nekazari"
-    jwt_audience: str = "account"
-    jwt_issuer: str = ""  # Auto-derived from keycloak_url + realm if empty
+    # HMAC signature validation (shared secret with api-gateway + entity-manager).
+    # The gateway signs X-Auth-Signature for every proxied request; the module
+    # verifies it fail-closed to prevent X-Tenant-ID spoofing from inside the cluster.
+    hmac_secret: str = ""
+    require_hmac: bool = True
     
     # Service-to-service authentication
     module_management_key: str = ""
@@ -63,18 +63,14 @@ class Settings(BaseSettings):
     # Worker
     worker_timeout: int = 600
     
-    @property
-    def jwt_issuer_url(self) -> str:
-        """Get the JWT issuer URL."""
-        if self.jwt_issuer:
-            return self.jwt_issuer
-        return f"{self.keycloak_url}/realms/{self.keycloak_realm}"
-    
-    @property
-    def jwks_url(self) -> str:
-        """Get the JWKS URL for token verification."""
-        return f"{self.jwt_issuer_url}/protocol/openid-connect/certs"
-    
+    def enforce_required_secrets(self) -> None:
+        """Fail fast at startup if security-critical secrets are missing."""
+        if self.require_hmac and not self.hmac_secret:
+            raise RuntimeError(
+                "HMAC_SECRET is required when REQUIRE_HMAC=true "
+                "(fail-closed). Set it from the shared jwt-secret/secret."
+            )
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
 
 
