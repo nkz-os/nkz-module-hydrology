@@ -14,27 +14,20 @@ INSERT INTO marketplace_modules (
     metadata
 ) VALUES (
     'hydrology', 'hydrology', 'NKZ Water Studio',
-    'NKZ Water Studio — watershed delineation, DEM analysis, hydrological modeling, and water harvesting simulation for precision agriculture.',
-    '/modules/hydrology/nkz-module.js', '0.1.0', 'nkz-os', 'hydrology',
+    'NKZ Water Studio — DEM watershed & flow analysis (beta). Hydrological modeling capabilities in active development.',
+    '/modules/hydrology/nkz-module.js', '0.0.1-beta', 'nkz-os', 'hydrology',
     '/hydrology', 'NKZ Water Studio', 'ADDON_FREE', 'basic',
     'FREE', false, true,
     ARRAY['Farmer', 'TenantAdmin', 'PlatformAdmin'],
     '{
         "icon": "💧",
         "color": "#06B6D4",
-        "shortDescription": "Water harvesting simulation and design",
+        "shortDescription": "DEM watershed & flow analysis (beta)",
         "features": [
-            "DEM-based watershed delineation",
-            "Stream network extraction",
-            "Topographic Wetness Index (TWI)",
-            "Rainfall-runoff modeling (SCS-CN)",
-            "Sediment yield (MUSLE)",
-            "Pond siting with pondScore",
-            "Keyline design and RTK guidance",
-            "Swale and check dam design",
-            "Multi-scenario water harvesting comparison",
-            "Water Story 3D visualization in CesiumJS"
+            "DEM-based watershed delineation (beta)",
+            "Stream network extraction"
         ],
+        "maturity": "beta",
         "setup_parcel_url": "http://hydrology-api-service:8000/api/v1/hydrology/internal/setup-parcel",
         "backend_url": "http://hydrology-api-service:8000",
         "backend_only": false,
