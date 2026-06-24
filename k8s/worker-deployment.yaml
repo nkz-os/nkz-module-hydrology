@@ -21,17 +21,11 @@ spec:
         - name: worker
           image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend@sha256:75e149448d451ab321c55fa4d499337e0a5cee9ac27dd9e64fe959e7d1d0a6fa
           imagePullPolicy: IfNotPresent
-          command:
-            - rq
-            - worker
-            - hydrology-processing
-            - "--url"
-            - "$(REDIS_URL)"
-            - name: REDIS_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: redis-secret
-                  key: password
+          command: ["rq", "worker", "hydrology-processing", "--url", "$(REDIS_URL)"]
+          envFrom:
+            - configMapRef:
+                name: hydrology-config
+                optional: true
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -47,6 +41,11 @@ spec:
                 secretKeyRef:
                   name: internal-service-secret
                   key: INTERNAL_SERVICE_SECRET
+            - name: HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-secret
+                  key: secret
           resources:
             requests:
               memory: "1Gi"

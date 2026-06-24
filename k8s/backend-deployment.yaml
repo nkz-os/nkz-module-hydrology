@@ -24,6 +24,10 @@ spec:
           ports:
             - name: http
               containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: hydrology-config
+                optional: true
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -39,15 +43,20 @@ spec:
                 secretKeyRef:
                   name: internal-service-secret
                   key: INTERNAL_SERVICE_SECRET
+            - name: HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-secret
+                  key: secret
           livenessProbe:
             httpGet:
-              path: /health
+              path: /healthz
               port: http
             initialDelaySeconds: 30
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /health
+              path: /readyz
               port: http
             initialDelaySeconds: 10
             periodSeconds: 5
