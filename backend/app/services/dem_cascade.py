@@ -59,14 +59,9 @@ async def fetch_dem(lat: float, lon: float, parcel_id: str) -> bytes:
 
 async def _try_lidar(parcel_id: str, settings) -> Optional[bytes]:
     """Check LiDAR module MinIO bucket for user-uploaded DEM."""
-    import boto3
     try:
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=f"http://{settings.minio_endpoint}",
-            aws_access_key_id=settings.minio_access_key,
-            aws_secret_access_key=settings.minio_secret_key,
-        )
+        from app.services.s3 import get_s3_client
+        s3 = get_s3_client()
         key = f"dtm/{parcel_id}/dtm.tif"
         resp = s3.get_object(Bucket=settings.minio_bucket, Key=key)
         return resp["Body"].read()
@@ -105,14 +100,9 @@ async def _try_copernicus(lat: float, lon: float) -> Optional[bytes]:
 
 async def _minio_get(settings, key: str) -> Optional[bytes]:
     """Get from MinIO cache."""
-    import boto3
     try:
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=f"http://{settings.minio_endpoint}",
-            aws_access_key_id=settings.minio_access_key,
-            aws_secret_access_key=settings.minio_secret_key,
-        )
+        from app.services.s3 import get_s3_client
+        s3 = get_s3_client()
         resp = s3.get_object(Bucket=settings.minio_bucket, Key=key)
         return resp["Body"].read()
     except Exception:
@@ -121,14 +111,9 @@ async def _minio_get(settings, key: str) -> Optional[bytes]:
 
 async def _minio_put(settings, key: str, data: bytes):
     """Store in MinIO cache."""
-    import boto3
     try:
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=f"http://{settings.minio_endpoint}",
-            aws_access_key_id=settings.minio_access_key,
-            aws_secret_access_key=settings.minio_secret_key,
-        )
+        from app.services.s3 import get_s3_client
+        s3 = get_s3_client()
         s3.put_object(Bucket=settings.minio_bucket, Key=key, Body=data)
     except Exception as e:
         logger.warning("MinIO cache write failed: %s", e)

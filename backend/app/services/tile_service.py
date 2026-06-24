@@ -9,27 +9,16 @@ import json
 import logging
 from typing import Optional
 
-import boto3
-from botocore.config import Config as BotoConfig
-
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
 def _s3_client():
-    """Create a boto3 S3 client configured from app settings."""
-    settings = get_settings()
-    return boto3.client(
-        "s3",
-        endpoint_url=f"http://{settings.minio_endpoint}"
-                     if not settings.minio_endpoint.startswith("http")
-                     else settings.minio_endpoint,
-        aws_access_key_id=settings.minio_access_key,
-        aws_secret_access_key=settings.minio_secret_key,
-        region_name=settings.minio_region,
-        config=BotoConfig(signature_version="s3v4"),
-    )
+    """Create a boto3 S3 client configured from app settings (delegates to the
+    shared helper that normalizes the MinIO endpoint URL)."""
+    from app.services.s3 import get_s3_client
+    return get_s3_client()
 
 
 def _pmtiles_key(parcel_id: str, raster_name: str = "twi") -> str:
