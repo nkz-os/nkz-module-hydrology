@@ -21,7 +21,10 @@ def _bearer_token(request: Request) -> str:
     auth = request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
         return auth[len("Bearer "):]
-    return request.headers.get("Cookie", "")  # best-effort; HMAC needs the raw token
+    # No Bearer header: the gateway always forwards one, so reaching here means a
+    # non-gateway request. The HMAC will then fail closed (signature won't match),
+    # which is the intended behavior for any request not routed via the gateway.
+    return ""
 
 
 def require_auth(roles=None):
