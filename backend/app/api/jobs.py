@@ -1,25 +1,23 @@
-"""
-NKZ Water Studio — Job Management Router
-
-Polls RQ job status for hydrology analysis jobs.
-"""
-
-from fastapi import APIRouter, HTTPException
+"""Job status polling. Sanitizes RQ exc_info — never returns tracebacks to clients."""
+from fastapi import APIRouter, HTTPException, Depends
 from redis import Redis
 from rq.job import Job as RQJob
+
 from app.config import get_settings
+from app.middleware import require_auth
+from nkz_platform_sdk import AuthContext
 
 router = APIRouter(prefix="/jobs", tags=["Job Management"])
 
 
 @router.get("/{job_id}")
-async def get_job_status(job_id: str):
+async def get_job_status(job_id: str, ctx: AuthContext = require_auth()):
     """Get the status and result of a background job."""
-    _settings = get_settings()
-    _redis = Redis.from_url(_settings.redis_url)
+    settings = get_settings()
+    redis = Redis.from_url(settings.redis_url)
 
     try:
-        job = RQJob.fetch(job_id, connection=_redis)
+        job = RQJob.fetch(job_id, connection=redis)
     except Exception:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -30,7 +28,8 @@ async def get_job_status(job_id: str):
         "ended_at": job.ended_at.isoformat() if job.ended_at else None,
     }
     if job.is_failed:
-        result["error"] = str(job.exc_info)
+        # exc_info contains full Python tracebacks — internal only.
+        result["error"] = "job failed"
     elif job.is_finished:
         result["result"] = job.result
     return result

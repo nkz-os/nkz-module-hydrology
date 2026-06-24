@@ -20,7 +20,7 @@ from app.services.geolibre_engine import GeoLibreEngine, GeoLibreError
 logger = logging.getLogger(__name__)
 
 
-def run_dem_pipeline(parcel_id: str, job_id: str) -> dict:
+def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     """RQ worker entry point: full DEM pipeline for a parcel.
 
     Fase 0: synthetic DEM only. Real DEM cascade from Open-Meteo / Copernicus
@@ -28,7 +28,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str) -> dict:
 
     Returns a dict with status summary.
     """
-    logger.info("[%s] Starting DEM pipeline for parcel %s", job_id, parcel_id)
+    logger.info("[%s] Starting DEM pipeline for parcel %s tenant=%s", job_id, parcel_id, tenant_id or "-")
 
     dem = _fetch_dem(parcel_id)
     if not dem:

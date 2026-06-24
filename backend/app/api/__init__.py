@@ -5,9 +5,7 @@ Module-specific routers for hydrology analysis, background jobs,
 and parcel setup lifecycle.
 """
 
-from fastapi import APIRouter, Depends
-
-from app.middleware import TokenPayload, get_current_user, require_roles
+from fastapi import APIRouter
 
 from app.api.analyze import router as analyze_router
 from app.api.jobs import router as jobs_router
