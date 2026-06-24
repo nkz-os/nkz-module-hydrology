@@ -1,13 +1,15 @@
-"""
-NKZ Water Studio Backend - FastAPI Application
+"""NKZ Water Studio backend — FastAPI app factory.
 
-Main entry point for the backend service.
+CORS is handled by the api-gateway (the module has no direct public ingress).
+Health probes are split: /healthz (liveness, always 200) and /readyz (readiness,
+checks Redis). Both are exempt from auth and rate limiting.
 """
 
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.api import router as api_router
@@ -17,55 +19,44 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler for startup/shutdown events."""
     settings = get_settings()
-    logger.info("%s v%s starting — prefix=%s debug=%s",
-                settings.app_name, settings.app_version,
-                settings.api_prefix, settings.debug)
+    settings.enforce_required_secrets()  # fail-closed at startup
+    logger.info(
+        "%s v%s starting prefix=%s", settings.app_name, settings.app_version, settings.api_prefix
+    )
     yield
     logger.info("%s shutting down", settings.app_name)
 
 
 def create_app() -> FastAPI:
-    """Application factory."""
     settings = get_settings()
-    
     app = FastAPI(
         title=settings.app_name,
         version=settings.app_version,
-        description="NKZ Water Studio - Backend API for Nekazari Platform",
+        description="NKZ Water Studio backend API for the Nekazari platform",
         docs_url=f"{settings.api_prefix}/docs",
         redoc_url=f"{settings.api_prefix}/redoc",
         openapi_url=f"{settings.api_prefix}/openapi.json",
         lifespan=lifespan,
     )
-    
-    # CORS Middleware
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    
-    # Health check (at root for k8s probes)
-    # @limiter.exempt prevents CrashLoopBackOff if rate limiter is added later
-    @app.get("/health")
-    # @limiter.exempt
-    async def health_check():
-        """Health check endpoint for Kubernetes probes."""
-        return {
-            "status": "healthy",
-            "service": settings.app_name,
-            "version": settings.app_version,
-        }
-    
-    # Include API routes
+
+    @app.get("/healthz", include_in_schema=False)
+    async def healthz():
+        # Liveness — must never fail, exempt from rate limiter.
+        return {"status": "healthy", "service": settings.app_name, "version": settings.app_version}
+
+    @app.get("/readyz", include_in_schema=False)
+    async def readyz():
+        # Readiness — Redis reachable. Exempt from rate limiter.
+        try:
+            from redis import Redis
+            Redis.from_url(settings.redis_url).ping()
+        except Exception as exc:
+            return JSONResponse(status_code=503, content={"status": "not ready", "error": str(exc)})
+        return {"status": "ready", "service": settings.app_name}
+
     app.include_router(api_router, prefix=settings.api_prefix)
-    
     return app
 
 
-# Create application instance
 app = create_app()
