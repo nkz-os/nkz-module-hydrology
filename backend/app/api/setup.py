@@ -10,8 +10,7 @@ Auth: X-Internal-Service-Secret only (no JWT).
 Body: {"parcel_id": str, "tenant_id": str, "action": "activate"|"deactivate"}
 
 Activate path:
-    1. Create placeholder entities via nkz_platform_sdk.ModuleActivation
-    2. Ensure DeviceMeasurement subscription via SubscriptionRegistrar
+    1. Ensure DeviceMeasurement subscription via SubscriptionRegistrar
 
 Deactivate/teardown: log-only (actual cleanup in later phases).
 """
@@ -21,7 +20,6 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from nkz_platform_sdk.activation import ModuleActivation
 from nkz_platform_sdk.subscriptions import SubscriptionRegistrar
 
 from app.config import get_settings
@@ -30,11 +28,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
 
-# Placeholder entities owned by hydrology (design spec §3.3)
-PLACEHOLDER_ENTITIES = [
-    {"type": "AgriSoil", "id_suffix": "hydrology-profile"},
-    {"type": "WaterBalanceAssessment", "id_suffix": "latest"},
-]
+# NOTE (Ronda 2.2): hydrology creates NO placeholder entities at activation.
+# AgriParcelRecord/AgriParcelZone are published only when the DEM pipeline runs
+# (real data), not at setup.
 
 
 class SetupParcelRequest(BaseModel):
@@ -74,27 +70,9 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
             "action": body.action,
         }
 
-    # Activate path
-    activation = ModuleActivation(tenant_id=body.tenant_id)
-    try:
-        result = await activation.ensure_entities(
-            parcel_id=parcel_urn, entities=PLACEHOLDER_ENTITIES
-        )
-    finally:
-        await activation.close()
-
-    logger.info(
-        "setup-parcel %s tenant=%s: created=%d skipped=%d errors=%d",
-        body.parcel_id, body.tenant_id,
-        result["created"], result["skipped"], len(result["errors"]),
-    )
-
-    if result["errors"] and not (result["created"] or result["skipped"]):
-        raise HTTPException(
-            status_code=502,
-            detail=f"Orion-LD entity creation failed: {result['errors'][:3]}",
-        )
-
+    # Activate path: ensure the DeviceMeasurement subscription only.
+    # Hydrology creates NO entities at activation — AgriParcelRecord/Zone are
+    # published only when the DEM pipeline runs (real data), not at setup.
     settings = get_settings()
     notification_url = f"{settings.self_url}{settings.api_prefix}/webhooks/fiware-sensors"
     registrar = SubscriptionRegistrar(
@@ -106,7 +84,7 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
     )
     sub_result = await registrar.ensure_all([body.tenant_id])
     logger.info(
-        "setup-parcel subscription ensure tenant=%s: created=%d skipped=%d errors=%d",
+        "setup-parcel activate tenant=%s: created=%d skipped=%d errors=%d",
         body.tenant_id,
         sub_result["created"], sub_result["skipped"], len(sub_result["errors"]),
     )
@@ -114,7 +92,9 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
     return {
         "message": "activated",
         "parcel_id": body.parcel_id,
-        "created": result["created"],
-        "skipped": result["skipped"],
-        "entity_ids": result["entity_ids"],
+        "subscription": {
+            "created": sub_result["created"],
+            "skipped": sub_result["skipped"],
+            "errors": sub_result["errors"][:3],
+        },
     }

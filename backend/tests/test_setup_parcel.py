@@ -29,24 +29,16 @@ async def test_wrong_secret_returns_401():
 
 
 @pytest.mark.asyncio
-async def test_activate_calls_sdk_and_returns_201():
-    """Activate calls ModuleActivation + SubscriptionRegistrar and returns 201."""
+async def test_activate_only_ensures_subscription():
+    """Activate ensures the DeviceMeasurement subscription and returns 201; creates NO entities."""
     from app.api.setup import setup_parcel, SetupParcelRequest
 
     body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
     req = type("R", (), {"headers": {"X-Internal-Service-Secret": "s3cr3t"}, "client": None})()
 
     with patch("app.api.setup.get_settings", _mock_settings()), \
-         patch("app.api.setup.ModuleActivation") as MA, \
          patch("app.api.setup.SubscriptionRegistrar") as SR:
 
-        MA.return_value.ensure_entities = AsyncMock(
-            return_value={
-                "created": 2, "skipped": 0, "errors": [],
-                "entity_ids": ["urn:ngsi-ld:AgriSoil:t-1:P-1-hydrology-profile"],
-            }
-        )
-        MA.return_value.close = AsyncMock()
         SR.return_value.ensure_all = AsyncMock(
             return_value={"created": 1, "skipped": 0, "errors": []}
         )
@@ -55,29 +47,26 @@ async def test_activate_calls_sdk_and_returns_201():
 
     assert result["message"] == "activated"
     assert result["parcel_id"] == "P-1"
-    assert result["created"] == 2
+    assert result["subscription"]["created"] == 1
 
-    MA.assert_called_once_with(tenant_id="t-1")
-    MA.return_value.ensure_entities.assert_awaited_once()
-    MA.return_value.close.assert_awaited_once()
+    SR.assert_called_once()
+    SR.return_value.ensure_all.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_deactivate_no_sdk_calls():
-    """Deactivate does NOT call ModuleActivation or SubscriptionRegistrar."""
+    """Deactivate does NOT call SubscriptionRegistrar (log-only)."""
     from app.api.setup import setup_parcel, SetupParcelRequest
 
     body = SetupParcelRequest(parcel_id="P-2", tenant_id="t-2", action="deactivate")
     req = type("R", (), {"headers": {"X-Internal-Service-Secret": "s3cr3t"}, "client": None})()
 
     with patch("app.api.setup.get_settings", _mock_settings()), \
-         patch("app.api.setup.ModuleActivation") as MA, \
          patch("app.api.setup.SubscriptionRegistrar") as SR:
 
         result = await setup_parcel(req, body)
 
     assert result["message"] == "deactivate"
-    MA.assert_not_called()
     SR.assert_not_called()
 
 
@@ -90,13 +79,11 @@ async def test_teardown_no_sdk_calls():
     req = type("R", (), {"headers": {"X-Internal-Service-Secret": "s3cr3t"}, "client": None})()
 
     with patch("app.api.setup.get_settings", _mock_settings()), \
-         patch("app.api.setup.ModuleActivation") as MA, \
          patch("app.api.setup.SubscriptionRegistrar") as SR:
 
         result = await setup_parcel(req, body)
 
     assert result["message"] == "teardown"
-    MA.assert_not_called()
     SR.assert_not_called()
 
 
