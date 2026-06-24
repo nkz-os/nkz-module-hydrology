@@ -28,6 +28,10 @@ _RECORD_METRICS: dict[str, str] = {
 
 _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}
 
+# Allowed nkz:dataFidelity values (Property on AgriParcelRecord, NOT an SDM type).
+# Aligns with the cross-module dataFidelity contract (AGENTS §8) and crop-health.
+_DATA_FIDELITY = {"ign_5m", "ign_25m", "degraded_flat", "unavailable"}
+
 
 def _parcel_short(parcel_id: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", parcel_id.split(":")[-1]).strip("-")
@@ -45,6 +49,7 @@ def build_hydrology_record(
     observed_at: str,
     metrics: dict[str, float],
     dem_source: str,
+    data_fidelity: str = "ign_25m",
 ) -> dict[str, Any]:
     """Build a historized AgriParcelRecord dict for one DEM pipeline run.
 
@@ -55,13 +60,17 @@ def build_hydrology_record(
         observed_at: ISO-8601 timestamp of the run.
         metrics: Flat-scalar KPIs (subset of _RECORD_METRICS keys). Missing keys
             are omitted from the record (never emitted as null).
-        dem_source: One of _DEM_SOURCES.
+        dem_source: One of _DEM_SOURCES (coarse category: ign/copernicus/lidar/...).
+        data_fidelity: One of _DATA_FIDELITY (fine-grained: ign_5m/ign_25m/
+            degraded_flat/unavailable).
 
     Returns:
         NGSI-LD entity dict (no @context; the SDK adds it on persist).
     """
     if dem_source not in _DEM_SOURCES:
         raise ValueError(f"dem_source must be one of {_DEM_SOURCES}, got {dem_source!r}")
+    if data_fidelity not in _DATA_FIDELITY:
+        raise ValueError(f"data_fidelity must be one of {_DATA_FIDELITY}, got {data_fidelity!r}")
 
     entity: dict[str, Any] = {
         "id": (
@@ -73,6 +82,7 @@ def build_hydrology_record(
         "location": {"type": "GeoProperty", "value": geometry},
         "dateObserved": {"type": "Property", "value": {"@type": "DateTime", "@value": observed_at}},
         "nkz:demSource": {"type": "Property", "value": dem_source, "observedAt": observed_at},
+        "nkz:dataFidelity": {"type": "Property", "value": data_fidelity, "observedAt": observed_at},
     }
     for metric_name, value in metrics.items():
         attr = _RECORD_METRICS.get(metric_name)

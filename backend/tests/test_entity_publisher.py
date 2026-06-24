@@ -1,6 +1,8 @@
 """Tests for the hydrology NGSI-LD dict builders (pure functions, no Orion)."""
 import re
 
+import pytest
+
 from app.services.entity_publisher import build_hydrology_record, build_hydrology_zones
 
 
@@ -117,3 +119,31 @@ def test_zone_attrs_are_flat_scalars():
         assert key in z
         assert z[key]["type"] == "Property"
         assert not isinstance(z[key]["value"], (dict, list))
+
+
+def test_record_includes_data_fidelity_property():
+    rec = build_hydrology_record(
+        tenant_id="t1",
+        parcel_id="urn:ngsi-ld:AgriParcel:p1",
+        geometry={"type": "Point", "coordinates": [-1.64, 42.82]},
+        observed_at="2026-06-24T12:00:00Z",
+        metrics={"twiMean": 6.5},
+        dem_source="ign",
+        data_fidelity="ign_25m",
+    )
+    assert rec["nkz:dataFidelity"] == {
+        "type": "Property", "value": "ign_25m", "observedAt": "2026-06-24T12:00:00Z"
+    }
+
+
+def test_record_rejects_invalid_data_fidelity():
+    with pytest.raises(ValueError):
+        build_hydrology_record(
+            tenant_id="t1",
+            parcel_id="urn:ngsi-ld:AgriParcel:p1",
+            geometry={"type": "Point", "coordinates": [0, 0]},
+            observed_at="2026-06-24T12:00:00Z",
+            metrics={},
+            dem_source="ign",
+            data_fidelity="bogus",
+        )
