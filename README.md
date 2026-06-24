@@ -59,17 +59,25 @@ pnpm run dev
 
 ## API
 
-The backend exposes endpoints under `/api/v1/hydrology/`:
+All endpoints live under `/api/v1/hydrology/` and are proxied by the platform
+api-gateway (which validates JWT and injects tenant + HMAC headers). The module
+does **not** validate JWT itself.
 
-| Path | Description |
-|------|-------------|
-| `GET /health` | Kubernetes probe |
-| `POST /analyze/watershed` | Compute watershed boundaries |
-| `POST /analyze/flow-accumulation` | Compute flow accumulation |
-| `GET /jobs/` | List background jobs |
-| `GET /jobs/{id}` | Get job status |
-| `POST /setup/parcel/{id}` | Activate hydrology for a parcel |
-| `DELETE /setup/parcel/{id}` | Deactivate hydrology for a parcel |
+> Status: **beta** — only the DEM pipeline is wired end-to-end (Fase 0: synthetic
+> DEM; real DEM cascade + MinIO upload arrive in the next phase).
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `GET` | `/healthz` | Liveness probe | none |
+| `GET` | `/readyz` | Readiness (Redis) | none |
+| `POST` | `/analyze/{parcel_id}` | Enqueue DEM pipeline job → `{job_id}` | gateway + HMAC |
+| `GET` | `/jobs/{job_id}` | Poll job status/result | gateway + HMAC |
+| `GET` | `/visualization/{parcel_id}/tiles/twi` | TWI PMTiles URL | gateway + HMAC |
+| `GET` | `/visualization/{parcel_id}/tiles/risk` | Risk PMTiles URL | gateway + HMAC |
+| `GET` | `/visualization/{parcel_id}/flows` | Stream network GeoJSON | gateway + HMAC |
+| `GET` | `/visualization/{parcel_id}/flows/check` | Flow data existence | gateway + HMAC |
+| `GET` | `/visualization/{parcel_id}/kpis` | Scenario KPIs | gateway + HMAC |
+| `POST` | `/internal/setup-parcel` | Parcel activation (called by entity-manager) | X-Internal-Service-Secret |
 
 ## Deploy
 
