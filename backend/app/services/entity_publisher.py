@@ -1,75 +1,128 @@
+"""NGSI-LD dict builders for hydrology outputs (pure functions, no Orion I/O).
+
+Mirrors the canonical pattern of nkz-module-weather-map/app/records.py:
+  - AgriParcelRecord: historized, one record per DEM pipeline run, FLAT scalar
+    Properties (telemetry-worker drops dict/list when historizing to Timescale).
+  - AgriParcelZone:   static, upsert in-place, one per TWI quintile zone.
+
+These builders return dicts only. The caller persists them via the SDK's
+OrionClient (see records_publish.py). Each module owns ONLY its own capability:
+hydrology records carry hydrology attributes, never duplicating weather/soil
+data from other modules (composition is the consumer's job — AGENTS §8).
 """
-Entity publisher: publish hydrology entities to Orion-LD via SDK.
-"""
 
-import json
-import logging
-from typing import Optional
+from __future__ import annotations
 
-from nkz_platform_sdk import SyncOrionClient
-from app.config import get_settings
+import re
+from typing import Any
 
-logger = logging.getLogger(__name__)
+# Hydrology KPIs that may appear on the AgriParcelRecord (all flat scalars).
+# metric_name -> AgriParcelRecord attribute name (nkz: prefix = custom attribute).
+_RECORD_METRICS: dict[str, str] = {
+    "twiMean": "nkz:twiMean",
+    "twiMax": "nkz:twiMax",
+    "streamLengthM": "nkz:streamLengthM",
+    "watershedAreaHa": "nkz:watershedAreaHa",
+    "slopeMean": "nkz:slopeMean",
+}
+
+_DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}
 
 
-def publish_streams(parcel_id: str, tenant_id: str, streams_geojson: bytes) -> list[str]:
-    """Publish stream network as nkz:OpenChannelFlow entities.
+def _parcel_short(parcel_id: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]", "-", parcel_id.split(":")[-1]).strip("-")
 
-    One entity per stream segment.
+
+def _ts_compact(observed_at: str) -> str:
+    return re.sub(r"[^0-9]", "", observed_at)
+
+
+def build_hydrology_record(
+    *,
+    tenant_id: str,
+    parcel_id: str,
+    geometry: dict[str, Any],
+    observed_at: str,
+    metrics: dict[str, float],
+    dem_source: str,
+) -> dict[str, Any]:
+    """Build a historized AgriParcelRecord dict for one DEM pipeline run.
+
+    Args:
+        tenant_id: Request tenant (from gateway X-Tenant-ID).
+        parcel_id: Full AgriParcel URN.
+        geometry: Parcel polygon GeoJSON.
+        observed_at: ISO-8601 timestamp of the run.
+        metrics: Flat-scalar KPIs (subset of _RECORD_METRICS keys). Missing keys
+            are omitted from the record (never emitted as null).
+        dem_source: One of _DEM_SOURCES.
+
+    Returns:
+        NGSI-LD entity dict (no @context; the SDK adds it on persist).
     """
-    settings = get_settings()
-    client = SyncOrionClient(tenant_id)
-    fc = json.loads(streams_geojson.decode("utf-8"))
-    ids = []
+    if dem_source not in _DEM_SOURCES:
+        raise ValueError(f"dem_source must be one of {_DEM_SOURCES}, got {dem_source!r}")
 
-    for i, feat in enumerate(fc.get("features", [])):
-        entity_id = f"urn:ngsi-ld:OpenChannelFlow:{parcel_id}:stream_{i}"
-        entity = {
-            "id": entity_id,
-            "type": "nkz:OpenChannelFlow",
-            "geometry": {"type": "Polygon", "coordinates": [[]]},
-            "location": {
-                "type": "GeoProperty",
-                "value": feat.get("geometry", {}),
-            },
-            "hasAgriParcel": {
-                "type": "Relationship",
-                "object": f"urn:ngsi-ld:AgriParcel:{parcel_id}",
-            },
-            "classification": {
-                "type": "Property",
-                "value": "stream",
-            },
+    entity: dict[str, Any] = {
+        "id": (
+            f"urn:ngsi-ld:AgriParcelRecord:hydrology-"
+            f"{tenant_id}-{_parcel_short(parcel_id)}-{_ts_compact(observed_at)}"
+        ),
+        "type": "AgriParcelRecord",
+        "hasAgriParcel": {"type": "Relationship", "object": parcel_id},
+        "location": {"type": "GeoProperty", "value": geometry},
+        "dateObserved": {"type": "Property", "value": {"@type": "DateTime", "@value": observed_at}},
+        "nkz:demSource": {"type": "Property", "value": dem_source, "observedAt": observed_at},
+    }
+    for metric_name, value in metrics.items():
+        attr = _RECORD_METRICS.get(metric_name)
+        if attr is None or value is None or isinstance(value, (dict, list)):
+            continue
+        entity[attr] = {"type": "Property", "value": float(value), "observedAt": observed_at}
+    return entity
+
+
+def build_hydrology_zones(
+    tenant_id: str,
+    parcel_id: str,
+    observed_at: str,
+    zones: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build static AgriParcelZone dicts (one per TWI quintile zone).
+
+    Args:
+        tenant_id: Request tenant.
+        parcel_id: Full AgriParcel URN.
+        observed_at: ISO-8601 timestamp.
+        zones: List of zone dicts, each with keys: zone_id, geometry, twiMean,
+            twiRange (str), areaHa, pixelCount.
+
+    Returns:
+        List of NGSI-LD AgriParcelZone dicts (empty if zones is empty).
+    """
+    parcel_short = _parcel_short(parcel_id)
+    out: list[dict[str, Any]] = []
+    for z in zones:
+        zone_id = z.get("zone_id")
+        if not zone_id:
+            continue
+        entity: dict[str, Any] = {
+            "id": f"urn:ngsi-ld:AgriParcelZone:{tenant_id}:{parcel_short}:{zone_id}",
+            "type": "AgriParcelZone",
+            "hasAgriParcel": {"type": "Relationship", "object": parcel_id},
+            "location": {"type": "GeoProperty", "value": z.get("geometry", {})},
+            "dateObserved": {"type": "Property", "value": {"@type": "DateTime", "@value": observed_at}},
+            "nkz:zoneId": {"type": "Property", "value": zone_id},
         }
-        client.upsert(entity)
-        ids.append(entity_id)
-
-    logger.info("Published %d stream entities for parcel %s", len(ids), parcel_id)
-    return ids
-
-
-def publish_h3_twi(
-    parcel_id: str, tenant_id: str, h3_data: dict[str, float]
-) -> list[str]:
-    """Publish TWI H3 cells as individual entities."""
-    settings = get_settings()
-    client = SyncOrionClient(tenant_id)
-    ids = []
-
-    for hex_id, twi_mean in h3_data.items():
-        entity_id = f"urn:ngsi-ld:TWI_H3:{parcel_id}:{hex_id}"
-        entity = {
-            "id": entity_id,
-            "type": "TWI_H3",
-            "h3Index": {"type": "Property", "value": hex_id},
-            "twiMean": {"type": "Property", "value": round(twi_mean, 2)},
-            "hasAgriParcel": {
-                "type": "Relationship",
-                "object": f"urn:ngsi-ld:AgriParcel:{parcel_id}",
-            },
-        }
-        client.upsert(entity)
-        ids.append(entity_id)
-
-    logger.info("Published %d TWI H3 entities for parcel %s", len(ids), parcel_id)
-    return ids
+        for key, attr in (
+            ("twiMean", "nkz:twiMean"),
+            ("twiRange", "nkz:twiRange"),
+            ("areaHa", "nkz:areaHa"),
+            ("pixelCount", "nkz:pixelCount"),
+        ):
+            value = z.get(key)
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            entity[attr] = {"type": "Property", "value": value}
+        out.append(entity)
+    return out
