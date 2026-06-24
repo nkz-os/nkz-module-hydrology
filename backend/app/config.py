@@ -32,6 +32,7 @@ class Settings(BaseSettings):
 
     # Self URL (used for subscription notification endpoints)
     self_url: str = "http://hydrology-api-service:8000"
+    eu_elevation_url: str = "http://elevation-api-service:80"
 
     # NGSI-LD Context
     orion_ld_context: str = "http://api-gateway-service:5000/ngsi-ld-context.json"
