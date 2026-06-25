@@ -28,6 +28,7 @@ from app.services.dem_client import DEMClient, DEMGrid, DEMUnavailable, resoluti
 from app.services.entity_publisher import build_hydrology_record, build_hydrology_zones
 from app.services.geolibre_engine import GeoLibreEngine
 from app.services.utm import reproject_grid_to_utm
+from app.services.weather_client import WeatherClient, WeatherUnavailable, ParcelWeather
 from app.services import tile_service, records_publish
 
 logger = logging.getLogger(__name__)
@@ -97,12 +98,20 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     # Upload outputs (tenant-scoped)
     _upload_results(parcel_id, tenant_id, result)
 
+    # ── Weather data (Ronda 2.3 — platform meteo contract §8) ────────────
+    # Fetch zonal weather stats from weather-map (internal service).
+    # Data is stored in the AgriParcelRecord but NOT wired to agronomic
+    # models yet (that is Ronda 2.5).
+    weather = _fetch_weather(parcel_id, tenant_id, job_id)
+
     # Publish record + zones (contract 2.2, real data).
     # NOTE: watershedAreaHa is intentionally OMITTED — watershed delineation
     # needs a pour point (2.5).  build_hydrology_record omits missing keys
     # cleanly (never null).
     observed_at = datetime.now(timezone.utc).isoformat()
     metrics = _compute_metrics(result)
+    if weather:
+        _merge_weather_metrics(metrics, weather)
     record = build_hydrology_record(
         tenant_id=tenant_id or "platform", parcel_id=parcel_id,
         geometry=geometry, observed_at=observed_at, metrics=metrics,
@@ -116,6 +125,51 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     asyncio.run(_publish(tenant_id, record, zones))
     return {"status": "done", "parcel_id": parcel_id,
             "dataFidelity": data_fidelity, "outputs": list(result.keys())}
+
+
+def _fetch_weather(
+    parcel_id: str, tenant_id: str, job_id: str,
+) -> ParcelWeather | None:
+    """Fetch zonal weather stats from weather-map (soft-fail).
+
+    Weather is non-blocking: if weather-map is unreachable the DEM pipeline
+    still completes.  The record simply won't carry meteo KPIs.
+    """
+    try:
+        client = WeatherClient()
+        pw = client.fetch_stats(parcel_id, tenant_id or "platform")
+        logger.info(
+            "[%s] weather: eto=%.2f precip=%.2f sm=%s",
+            job_id,
+            pw.eto_mm if pw.eto_mm is not None else -1,
+            pw.precipitation_mm if pw.precipitation_mm is not None else -1,
+            pw.soil_moisture,
+        )
+        return pw
+    except WeatherUnavailable as exc:
+        logger.warning("[%s] weather-map unavailable, proceeding without meteo: %s", job_id, exc)
+        return None
+    except Exception:
+        logger.exception("[%s] unexpected error fetching weather", job_id)
+        return None
+
+
+def _merge_weather_metrics(metrics: dict, weather: ParcelWeather) -> None:
+    """Merge weather KPIs into the metrics dict for the AgriParcelRecord.
+
+    Keys match _RECORD_METRICS in entity_publisher.py.
+    """
+    if weather.eto_mm is not None:
+        metrics["etoMm"] = weather.eto_mm
+    if weather.precipitation_mm is not None:
+        metrics["precipitationMm"] = weather.precipitation_mm
+    if weather.temperature_avg is not None:
+        metrics["temperatureAvg"] = weather.temperature_avg
+    if weather.temperature_min is not None:
+        metrics["temperatureMin"] = weather.temperature_min
+    if weather.soil_moisture is not None:
+        metrics["soilMoisture"] = weather.soil_moisture
+
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

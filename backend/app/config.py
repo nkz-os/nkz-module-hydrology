@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     # Self URL (used for subscription notification endpoints)
     self_url: str = "http://hydrology-api-service:8000"
     eu_elevation_url: str = "http://elevation-api-service:80"
+    weather_map_url: str = "http://weather-map-backend:8080"
 
     # NGSI-LD Context
     orion_ld_context: str = "http://api-gateway-service:5000/ngsi-ld-context.json"
@@ -55,8 +56,7 @@ class Settings(BaseSettings):
     minio_public_url: str = "https://minio.robotika.cloud"
     minio_region: str = "us-east-1"
 
-    # Open-Meteo cache
-    openmeteo_cache_ttl_days: int = 1
+
 
     # DEM processing
     dem_max_size_mb: int = 50
