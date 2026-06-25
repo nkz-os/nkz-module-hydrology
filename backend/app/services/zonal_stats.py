@@ -1,12 +1,16 @@
 """Zonal statistics extractor for TWI zones.
 
-Computes per-zone mean slope, TWI, and area from GeoLibre output rasters
+Computes per-zone mean slope, and area from GeoLibre output rasters
 by masking each zone's TWI range on the raster arrays.
+
+TWI range format comes from ``_compute_zones`` in ``hydrology_worker.py``
+(e.g. ``-inf-6.0``, ``6.0-10.0``, ``26.0-inf``).
 """
 from __future__ import annotations
 
 import io
 import re
+from typing import Optional
 
 import numpy as np
 import rasterio
@@ -43,11 +47,11 @@ def extract_zonal_stats(
     zones: list[dict],
     slope_bytes: bytes,
     twi_bytes: bytes,
-    accum_bytes: bytes,
+    accum_bytes: Optional[bytes] = None,
 ) -> list[dict]:
     """Enrich each zone dict with zonal mean stats.
 
-    Adds to each zone dict: slopeMean (float, percent), areaHa (float),
+    Adds to each zone dict: slopeMean (float, degrees), areaHa (float),
     pixelCount (int, updated from raster). Zones without matching pixels
     keep their existing values.
 
@@ -55,8 +59,8 @@ def extract_zonal_stats(
         zones: List from _compute_zones, each with zone_id, twiRange.
         slope_bytes: GeoLibre slope GeoTIFF (bytes).
         twi_bytes: GeoLibre TWI GeoTIFF (bytes).
-        accum_bytes: GeoLibre flow accumulation GeoTIFF (bytes) — reserved
-            for future use.
+        accum_bytes: GeoLibre flow accumulation GeoTIFF (bytes), optional.
+            Reserved for future use (zonal flow accumulation).
 
     Returns:
         Zones list with added keys (mutates in place).
