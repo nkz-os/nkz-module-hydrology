@@ -34,6 +34,8 @@ from app.services.scs_cn import runoff
 from app.services.musle import musle_sediment, ls_from_slope, c_from_ndvi
 from app.services.keyline import detect_keyline
 from app.services.pond_score import pond_score
+from app.services.orion_context_client import OrionContextClient
+from app.services.zonal_stats import extract_zonal_stats
 from app.services import tile_service, records_publish
 
 logger = logging.getLogger(__name__)
@@ -118,26 +120,27 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     if weather:
         _merge_weather_metrics(metrics, weather)
 
-    # ── Agronomic Models (Ronda 2.5) ────────────
-    # Default parameters to be retrieved from Orion-LD/API in future rounds
-    cn2 = 80.0
-    ndvi_mean = 0.4
-    ksat_mmh = 15.0
-    field_cap = 0.25
-    wilt_pt = 0.10
-    k_factor = 0.30
+    # ── Orion Context (Ronda 2.6) ────────────
+    with OrionContextClient(tenant_id or "platform") as orion_ctx:
+        soil = orion_ctx.get_soil_context(parcel_id)
+        ndvi_mean, ndvi_source = orion_ctx.get_ndvi_mean(parcel_id)
+    logger.info(
+        "[%s] Orion context: cn=%.0f ksat=%.1f ndvi=%.2f (%s) soil_source=%s",
+        job_id, soil.cn, soil.ksat_mmh, ndvi_mean, ndvi_source, soil.source,
+    )
 
     precip = weather.precipitation_mm if weather and weather.precipitation_mm is not None else 0.0
     eto = weather.eto_mm if weather and weather.eto_mm is not None else 0.0
 
     # 1. SCS-CN
-    run_mm, peak_m3s = runoff(precip, cn2)
+    run_mm, peak_m3s = runoff(precip, soil.cn)
     metrics["runoffMm"] = run_mm
     metrics["peakFlowM3s"] = peak_m3s
 
     # 2. Bucket Model
-    bucket = BucketModel(ksat_mmh=ksat_mmh, field_capacity_vv=field_cap, wilting_point_vv=wilt_pt)
-    b_res = bucket.step(precip, eto, cn=cn2)
+    bucket = BucketModel(ksat_mmh=soil.ksat_mmh, field_capacity_vv=soil.field_capacity_vv,
+                         wilting_point_vv=soil.wilting_point_vv)
+    b_res = bucket.step(precip, eto, cn=soil.cn)
     metrics["soilSaturationPct"] = b_res["saturation_pct"]
 
     # 3. MUSLE
@@ -145,16 +148,17 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     ls_fact = ls_from_slope(slope_mean)
     c_fact = c_from_ndvi(ndvi_mean)
     runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0
-    sediment = musle_sediment(runoff_m3, peak_m3s, k_factor, ls_fact, c_fact)
+    sediment = musle_sediment(runoff_m3, peak_m3s, soil.k_factor, ls_fact, c_fact)
     metrics["sedimentYieldTonnes"] = sediment
 
     # 4. Pond Viability
     try:
+        earthwork = max(100.0, runoff_m3 * 0.5)
         ps = pond_score(
             catchment_yield_m3=runoff_m3,
-            earthwork_m3=1000.0,
+            earthwork_m3=earthwork,
             reliability_pct=80.0,
-            ksat_mmh=ksat_mmh
+            ksat_mmh=soil.ksat_mmh,
         )
         metrics["pondViability"] = ps["pondScore"]
     except Exception as e:
@@ -177,9 +181,56 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
         dem_source="ign",
         data_fidelity=data_fidelity,
     )
+    # ── Agronomic Models — Zonal (Ronda 2.6) ────────────
+    zones_raw = _compute_zones(result)
+    try:
+        zones_raw = extract_zonal_stats(
+            zones_raw, result["slope.tif"], result["twi.tif"], result["accum.tif"],
+        )
+        logger.info("[%s] zonal stats extracted for %d zones", job_id, len(zones_raw))
+    except Exception as e:
+        logger.warning("[%s] zonal stats extraction failed: %s", job_id, e)
+
+    # Run agronomic models per zone — NEW BucketModel per zone (stateful!)
+    try:
+        for zone in zones_raw:
+            z_slope = zone.get("slopeMean", slope_mean)
+            z_area_ha = zone.get("areaHa", area_ha / max(len(zones_raw), 1))
+
+            z_run_mm, z_peak_m3s = runoff(precip, soil.cn)
+            zone["nkz:runoffMm"] = z_run_mm
+            zone["nkz:peakFlowM3s"] = z_peak_m3s
+
+            bucket_z = BucketModel(
+                ksat_mmh=soil.ksat_mmh,
+                field_capacity_vv=soil.field_capacity_vv,
+                wilting_point_vv=soil.wilting_point_vv,
+            )
+            bz = bucket_z.step(precip, eto, cn=soil.cn)
+            zone["nkz:soilSaturationPct"] = bz["saturation_pct"]
+
+            z_slope_len = max(10.0, min(200.0, (z_area_ha * 10000.0) ** 0.5))
+            z_ls = ls_from_slope(z_slope, slope_length_m=z_slope_len)
+            z_runoff_m3 = (z_run_mm / 1000.0) * z_area_ha * 10000.0
+            z_sed = musle_sediment(z_runoff_m3, z_peak_m3s, soil.k_factor, z_ls, c_fact)
+            zone["nkz:sedimentYieldTonnes"] = z_sed
+
+            try:
+                z_ew = max(100.0, z_runoff_m3 * 0.5)
+                z_ps = pond_score(z_runoff_m3, z_ew, 80.0, soil.ksat_mmh)
+                zone["nkz:pondViability"] = z_ps["pondScore"]
+            except Exception:
+                pass
+
+            zone["nkz:keylineGrade"] = metrics.get("keylineGrade", 0.0)
+
+        logger.info("[%s] zonal models complete for %d zones", job_id, len(zones_raw))
+    except Exception as e:
+        logger.warning("[%s] zonal model run failed: %s", job_id, e)
+
     zones = build_hydrology_zones(
         tenant_id=tenant_id or "platform", parcel_id=parcel_id,
-        observed_at=observed_at, zones=_compute_zones(result),
+        observed_at=observed_at, zones=zones_raw,
     )
     asyncio.run(_publish(tenant_id, record, zones))
     return {"status": "done", "parcel_id": parcel_id,

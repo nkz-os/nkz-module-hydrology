@@ -22,6 +22,12 @@ def _fake_dem_bytes(cols=60, rows=60):
     return buf.getvalue()
 
 
+def _default_soil():
+    """Return a default SoilContext for tests (matches OrionContextClient defaults)."""
+    from app.services.orion_context_client import SoilContext
+    return SoilContext()
+
+
 def test_run_dem_pipeline_uploads_and_publishes():
     from app.workers.hydrology_worker import run_dem_pipeline
     fake_dem = _fake_dem_bytes()
@@ -40,11 +46,19 @@ def test_run_dem_pipeline_uploads_and_publishes():
          patch("app.workers.hydrology_worker._read_parcel_polygon",
                return_value=(poly, 5.0)), \
          patch("app.workers.hydrology_worker._reproject_to_utm",
-               return_value=fake_dem):
+               return_value=fake_dem), \
+         patch("app.workers.hydrology_worker.OrionContextClient") as OCC, \
+         patch("app.workers.hydrology_worker.extract_zonal_stats",
+               side_effect=lambda z, *a: z):
         DEMC.return_value.fetch_dem.return_value = MagicMock()
         rp.publish_hydrology_record = AsyncMock()
         rp.publish_hydrology_zones = AsyncMock()
         ts.generate_twi_pmtiles = MagicMock(return_value="http://m/twi.pmtiles")
+
+        occ_mock = MagicMock()
+        occ_mock.get_soil_context.return_value = _default_soil()
+        occ_mock.get_ndvi_mean.return_value = (0.4, "default")
+        OCC.return_value.__enter__.return_value = occ_mock
 
         result = run_dem_pipeline("urn:ngsi-ld:AgriParcel:p1", "job-1", "t1")
 
@@ -72,11 +86,20 @@ def test_run_dem_pipeline_flat_dem_degrades():
          patch("app.workers.hydrology_worker._read_parcel_polygon",
                return_value=(poly, 5.0)), \
          patch("app.workers.hydrology_worker._reproject_to_utm",
-               return_value=flat_dem):
+               return_value=flat_dem), \
+         patch("app.workers.hydrology_worker.OrionContextClient") as OCC, \
+         patch("app.workers.hydrology_worker.extract_zonal_stats",
+               side_effect=lambda z, *a: z):
         DEMC.return_value.fetch_dem.return_value = MagicMock()
         rp.publish_hydrology_record = AsyncMock()
         rp.publish_hydrology_zones = AsyncMock()
         ts.generate_twi_pmtiles = MagicMock(return_value=None)
+
+        occ_mock = MagicMock()
+        occ_mock.get_soil_context.return_value = _default_soil()
+        occ_mock.get_ndvi_mean.return_value = (0.4, "default")
+        OCC.return_value.__enter__.return_value = occ_mock
+
         result = run_dem_pipeline("urn:ngsi-ld:AgriParcel:p1", "job-1", "t1")
 
     # record carries degraded_flat

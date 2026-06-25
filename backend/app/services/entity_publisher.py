@@ -45,6 +45,16 @@ _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}
 # Aligns with the cross-module dataFidelity contract (AGENTS §8) and crop-health.
 _DATA_FIDELITY = {"ign_5m", "ign_25m", "degraded_flat", "unavailable"}
 
+# Zonal agronomic metrics that may appear on AgriParcelZone (Ronda 2.6).
+_ZONE_METRICS: dict[str, str] = {
+    "nkz:runoffMm": "nkz:runoffMm",
+    "nkz:peakFlowM3s": "nkz:peakFlowM3s",
+    "nkz:soilSaturationPct": "nkz:soilSaturationPct",
+    "nkz:sedimentYieldTonnes": "nkz:sedimentYieldTonnes",
+    "nkz:pondViability": "nkz:pondViability",
+    "nkz:keylineGrade": "nkz:keylineGrade",
+}
+
 
 def _parcel_short(parcel_id: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "-", parcel_id.split(":")[-1]).strip("-")
@@ -147,5 +157,11 @@ def build_hydrology_zones(
             if value is None or isinstance(value, (dict, list)):
                 continue
             entity[attr] = {"type": "Property", "value": value}
+        # Zonal agronomic metrics (Ronda 2.6)
+        for key, attr in _ZONE_METRICS.items():
+            value = z.get(key)
+            if value is None or isinstance(value, (dict, list)):
+                continue
+            entity[attr] = {"type": "Property", "value": float(value)}
         out.append(entity)
     return out
