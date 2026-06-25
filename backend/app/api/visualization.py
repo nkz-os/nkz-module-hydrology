@@ -24,7 +24,7 @@ async def get_twi_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
     """Get TWI PMTiles URL for a parcel."""
     from app.services.tile_service import get_pmtiles_url
 
-    url = get_pmtiles_url(parcel_id, "twi")
+    url = get_pmtiles_url(parcel_id, ctx.tenant_id, "twi")
     if url:
         return {"pmtiles_url": url}
     settings = get_settings()
@@ -37,7 +37,7 @@ async def get_risk_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
     """Get risk overlay PMTiles URL for a parcel."""
     from app.services.tile_service import get_pmtiles_url
 
-    url = get_pmtiles_url(parcel_id, "risk")
+    url = get_pmtiles_url(parcel_id, ctx.tenant_id, "risk")
     if url:
         return {"pmtiles_url": url}
     settings = get_settings()
@@ -50,7 +50,7 @@ async def get_flows(parcel_id: str, ctx: AuthContext = require_auth()):
     """Get stream network GeoJSON for a parcel."""
     from app.services.tile_service import get_flow_lines_geojson
 
-    geojson = get_flow_lines_geojson(parcel_id)
+    geojson = get_flow_lines_geojson(parcel_id, ctx.tenant_id)
     if not geojson:
         raise HTTPException(status_code=404, detail="No flow data — run DEM pipeline first")
     return json.loads(geojson.decode("utf-8"))
@@ -61,7 +61,7 @@ async def check_flows_exist(parcel_id: str, ctx: AuthContext = require_auth()):
     """Check whether flow-line data exists for a parcel."""
     from app.services.tile_service import get_flow_lines_geojson
 
-    return {"exists": get_flow_lines_geojson(parcel_id) is not None}
+    return {"exists": get_flow_lines_geojson(parcel_id, ctx.tenant_id) is not None}
 
 
 @router.get("/{parcel_id}/kpis")
