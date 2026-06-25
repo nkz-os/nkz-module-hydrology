@@ -1,15 +1,34 @@
 {
-  "module": {
+  "hydrology": {
     "title": "NKZ Water Studio",
-    "tenant": "Tenant",
-    "notAuthenticated": "Not authenticated.",
-    "placeholder": "Replace this page with your module's main UI."
-  },
-  "slot": {
-    "authRequired": "Authentication required.",
-    "refreshAria": "Refresh",
-    "entity": "Entity:",
-    "user": "User:",
-    "placeholder": "Replace this component with your module's functionality."
+    "zonalKpis": "Zonal KPIs",
+    "keylineDesigner": "Keyline Designer",
+    "pondSiting": "Pond Siting",
+    "swaleDesigner": "Infiltration Swale",
+    "checkDam": "Check Dam",
+    "zone": "Zone",
+    "runoff": "Runoff (mm)",
+    "sediment": "Sediment (t)",
+    "saturation": "Saturation (%)",
+    "pondViability": "Pond Score",
+    "keylineGrade": "Grade (%)",
+    "grade": "Grade",
+    "spacing": "Spacing (m)",
+    "lines": "Lines",
+    "save": "Save",
+    "export": "Export",
+    "exportGisRouting": "Export to GIS-routing",
+    "copyGeoJson": "Copy GeoJSON",
+    "downloadGpx": "Download GPX",
+    "downloadKml": "Download KML",
+    "viable": "Viable",
+    "notViable": "Not viable",
+    "marginal": "Marginal",
+    "keypoint": "Keypoint",
+    "primaryKeyline": "Primary keyline",
+    "parallelLines": "Parallel lines ({{count}})",
+    "loading": "Loading...",
+    "noData": "No hydrological data available for this parcel",
+    "runAnalysis": "Run DEM analysis first"
   }
 }

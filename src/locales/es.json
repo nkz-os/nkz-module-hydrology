@@ -1,15 +1,34 @@
 {
-  "module": {
+  "hydrology": {
     "title": "NKZ Water Studio",
-    "tenant": "Tenant",
-    "notAuthenticated": "No autenticado.",
-    "placeholder": "Sustituye esta página por la UI principal de tu módulo."
-  },
-  "slot": {
-    "authRequired": "Autenticación requerida.",
-    "refreshAria": "Actualizar",
-    "entity": "Entidad:",
-    "user": "Usuario:",
-    "placeholder": "Sustituye este componente por la funcionalidad de tu módulo."
+    "zonalKpis": "KPIs zonales",
+    "keylineDesigner": "Diseñador Keyline",
+    "pondSiting": "Ubicación de Balsas",
+    "swaleDesigner": "Zanja de Infiltración",
+    "checkDam": "Dique de Contención",
+    "zone": "Zona",
+    "runoff": "Escorrentía (mm)",
+    "sediment": "Sedimento (t)",
+    "saturation": "Saturación (%)",
+    "pondViability": "Viabilidad",
+    "keylineGrade": "Pendiente (%)",
+    "grade": "Pendiente",
+    "spacing": "Espaciado (m)",
+    "lines": "Líneas",
+    "save": "Guardar",
+    "export": "Exportar",
+    "exportGisRouting": "Exportar a GIS-routing",
+    "copyGeoJson": "Copiar GeoJSON",
+    "downloadGpx": "Descargar GPX",
+    "downloadKml": "Descargar KML",
+    "viable": "Viable",
+    "notViable": "No viable",
+    "marginal": "Marginal",
+    "keypoint": "Keypoint",
+    "primaryKeyline": "Keyline primaria",
+    "parallelLines": "Líneas paralelas ({{count}})",
+    "loading": "Cargando...",
+    "noData": "No hay datos hidrológicos para esta parcela",
+    "runAnalysis": "Ejecutar análisis DEM primero"
   }
 }
