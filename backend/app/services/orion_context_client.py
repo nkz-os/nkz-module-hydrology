@@ -114,9 +114,11 @@ class OrionContextClient:
         Returns SoilContext with source='orion' on success, 'default' on miss.
         """
         try:
+            # Query both old (refAgriParcel) and new (hasAgriParcel) relationship
+            # names per AGENTS §3 migration contract.
             entities = self.orion.query_entities(
                 type="AgriSoil",
-                q=f'hasAgriParcel=="{parcel_id}"',
+                q=f'hasAgriParcel=="{parcel_id}",refAgriParcel=="{parcel_id}"',
             )
             if not entities:
                 logger.info("No AgriSoil found for parcel %s", parcel_id)
@@ -161,9 +163,11 @@ class OrionContextClient:
         Returns (ndvi_mean, source) where source is 'orion' or 'default'.
         """
         try:
+            # Query both old (refAgriParcel) and new (hasAgriParcel) relationship
+            # names per AGENTS §3 migration contract.
             entities = self.orion.query_entities(
                 type="EOProduct",
-                q=f'hasAgriParcel=="{parcel_id}";indexType=="NDVI"',
+                q=f'hasAgriParcel=="{parcel_id}",refAgriParcel=="{parcel_id}";indexType=="NDVI"',
             )
             if not entities:
                 logger.info("No EOProduct found for parcel %s", parcel_id)
