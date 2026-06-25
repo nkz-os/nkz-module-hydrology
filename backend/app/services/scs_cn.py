@@ -44,15 +44,19 @@ def cn_for_amc(cn2: float, amc: str) -> float:
     return cn2
 
 
-def runoff(precip_mm: float, cn: float) -> tuple[float, float]:
-    """Compute SCS-CN direct runoff and simplified peak flow.
+def runoff(precip_mm: float, cn: float, area_ha: float = 100.0, tc_h: float = 0.5) -> tuple[float, float]:
+    """Compute SCS-CN direct runoff and peak flow.
 
     Args:
         precip_mm: Rainfall depth (mm).
         cn: Curve number (adjusted for AMC if needed).
+        area_ha: Drainage area in hectares (default 100 ha = 1 km²).
+        tc_h: Time of concentration in hours (default 0.5).
 
     Returns:
-        Tuple of (runoff_mm, peak_flow_m3s).
+        Tuple of (runoff_mm, peak_flow_m3s). Peak flow uses
+        the SCS triangular unit hydrograph:
+        qp = (0.208 * A_km² * Q_mm) / Tc_h
     """
     S = 25400.0 / cn - 254
     Ia = 0.2 * S
@@ -60,6 +64,9 @@ def runoff(precip_mm: float, cn: float) -> tuple[float, float]:
         return (0.0, 0.0)
 
     Q = (precip_mm - Ia) ** 2 / (precip_mm - Ia + S)
-    # Simplified peak flow (m³/s) per unit area (km² → 100 ha)
-    qp = 0.208 * Q * 100.0 / 0.5
+    # SCS peak flow formula expects A in km² (not ha).
+    # Constant 0.208 = (2 * 1e6) / (3600 * 1000 * …) for SI units:
+    # Qp (m³/s) = 0.208 * A(km²) * Q(mm) / Tp(h)
+    area_km2 = area_ha / 100.0
+    qp = (0.208 * Q * area_km2) / tc_h
     return (Q, qp)

@@ -102,8 +102,9 @@ class TestRunoff:
     def test_peak_flow_positive_with_runoff(self):
         q, qp = runoff(80.0, 85)
         assert qp > 0
-        # qp = 0.208 * Q * 100 / 0.5
-        assert qp == pytest.approx(0.208 * q * 200, abs=1e-9)
+        # Default area_ha=100 → 1 km²; default tc_h=0.5
+        # qp = 0.208 * Q * 1.0 / 0.5 = 0.208 * Q * 2
+        assert qp == pytest.approx(0.208 * q * 2, abs=1e-9)
 
     def test_monotonic_with_cn(self):
         """Higher CN → higher runoff for same rainfall."""
@@ -123,3 +124,38 @@ class TestRunoff:
         assert len(result) == 2
         assert isinstance(result[0], float)
         assert isinstance(result[1], float)
+
+
+# ---------------------------------------------------------------------------
+# runoff with area_ha / tc_h (parametrized peak flow)
+# ---------------------------------------------------------------------------
+
+class TestRunoffWithArea:
+    def test_double_area_doubles_peak_flow(self):
+        """Peak flow scales linearly with area for same Q and Tc."""
+        q1, qp1 = runoff(50.0, 78, area_ha=50.0, tc_h=1.0)
+        q2, qp2 = runoff(50.0, 78, area_ha=100.0, tc_h=1.0)
+        assert q1 == q2  # runoff depth unchanged
+        assert qp2 == pytest.approx(qp1 * 2.0, rel=0.01)
+
+    def test_half_tc_doubles_peak_flow(self):
+        """Peak flow inversely proportional to Tc."""
+        _, qp1 = runoff(50.0, 78, area_ha=100.0, tc_h=2.0)
+        _, qp2 = runoff(50.0, 78, area_ha=100.0, tc_h=1.0)
+        assert qp2 == pytest.approx(qp1 * 2.0, rel=0.01)
+
+    def test_hectares_are_converted_to_km2(self):
+        """SCS formula expects km², not ha. 100 ha = 1 km².
+        Peak flow for 100 ha must equal peak flow for 1 km²."""
+        _, qp_ha = runoff(50.0, 78, area_ha=100.0, tc_h=1.0)
+        # Q ≈ 11.86mm for CN=78 P=50; A=1km² Tc=1h → qp = 0.208*11.86*1/1 ≈ 2.47
+        assert qp_ha == pytest.approx(2.47, rel=0.05)
+
+    def test_peak_flow_is_reasonable_for_small_parcel(self):
+        """A 5-ha parcel with 50mm rain and CN 78 → peak flow ~0.25 m³/s.
+        With the old bug (no ha→km² conversion) this would be ~25 m³/s,
+        which is absurd for 5 ha."""
+        _, qp = runoff(50.0, 78, area_ha=5.0, tc_h=0.5)
+        # Q ≈ 11.86mm, A=0.05km², Tc=0.5h → qp = 0.208*11.86*0.05/0.5 ≈ 0.247
+        assert qp == pytest.approx(0.247, rel=0.05)
+        assert qp < 2.0  # sanity: not absurdly high

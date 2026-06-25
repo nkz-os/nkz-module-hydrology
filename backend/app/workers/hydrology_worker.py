@@ -134,8 +134,15 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     precip = weather.precipitation_mm if weather and weather.precipitation_mm is not None else 0.0
     eto = weather.eto_mm if weather and weather.eto_mm is not None else 0.0
 
+    # Time of concentration (Kirpich) — needed by SCS-CN peak flow
+    slope_mean = metrics.get("slopeMean", 5.0)
+    stream_len = metrics.get("streamLengthM", 100.0)
+    slope_frac = math.tan(math.radians(slope_mean)) if slope_mean > 0 else 0.001
+    tc_h = (0.0195 * (stream_len ** 0.77) / (slope_frac ** 0.385)) / 60.0
+    tc_h = max(0.1, min(tc_h, 24.0))  # clamp to sensible range
+
     # 1. SCS-CN
-    run_mm, peak_m3s = runoff(precip, soil.cn)
+    run_mm, peak_m3s = runoff(precip, soil.cn, area_ha=area_ha, tc_h=tc_h)
     metrics["runoffMm"] = run_mm
     metrics["peakFlowM3s"] = peak_m3s
 
@@ -146,7 +153,6 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     metrics["soilSaturationPct"] = b_res["saturation_pct"]
 
     # 3. MUSLE
-    slope_mean = metrics.get("slopeMean", 5.0)
     ls_fact = ls_from_slope(slope_mean)
     c_fact = c_from_ndvi(ndvi_mean)
     runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0
@@ -199,7 +205,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
             z_slope = zone.get("slopeMean", slope_mean)
             z_area_ha = zone.get("areaHa", area_ha / max(len(zones_raw), 1))
 
-            z_run_mm, z_peak_m3s = runoff(precip, soil.cn)
+            z_run_mm, z_peak_m3s = runoff(precip, soil.cn, area_ha=z_area_ha, tc_h=tc_h)
             zone["nkz:runoffMm"] = z_run_mm
             zone["nkz:peakFlowM3s"] = z_peak_m3s
 
