@@ -3,6 +3,7 @@ Keyline detection: valley keypoint → guide line at target grade.
 Pure Python, no geolibre dependency.
 """
 
+import math
 import numpy as np
 from rasterio.transform import Affine
 from typing import Optional
@@ -105,6 +106,9 @@ def detect_keyline(
         },
         "properties": {
             "grade": target_grade,
-            "length_m": len(guide_points) * abs(transform.a),
+            "length_m": sum(
+            math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+            for p1, p2 in zip(guide_points, guide_points[1:])
+        ),
         },
     }

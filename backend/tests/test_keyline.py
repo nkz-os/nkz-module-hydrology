@@ -1,5 +1,6 @@
 """Tests for keyline detection."""
 
+import math
 import numpy as np
 import pytest
 from rasterio.transform import from_origin
@@ -45,3 +46,21 @@ def test_flat_dem_returns_none(natural_valley):
     flat = np.ones_like(dem) * 100
     result = detect_keyline(flat, transform, accum, min_height_m=10)
     assert result is None or isinstance(result, dict)
+
+
+def test_keyline_length_is_euclidean(natural_valley):
+    """Length should be sum of euclidean distances between consecutive points,
+    not just N * cellsize."""
+    from app.services.keyline import detect_keyline
+    dem, accum, transform = natural_valley
+    result = detect_keyline(dem, transform, accum, target_grade=0.005)
+    assert result is not None
+
+    coords = result["keyline"]["coordinates"]
+    expected_m = 0.0
+    for p1, p2 in zip(coords, coords[1:]):
+        expected_m += math.hypot(p2[0] - p1[0], p2[1] - p1[1])
+
+    actual_m = result["properties"]["length_m"]
+    assert actual_m == pytest.approx(expected_m, rel=0.01), \
+        f"length_m={actual_m} but euclidean={expected_m}"
