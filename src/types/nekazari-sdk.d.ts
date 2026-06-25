@@ -52,6 +52,8 @@ declare module '@nekazari/sdk' {
   export function useTranslation(namespace?: string | string[]): TranslationContextValue;
 
   export interface ViewerContextValue {
+    /** The Cesium viewer instance (available in map context) */
+    cesiumViewer: any;
     selectedEntityId: string | null;
     selectedEntityType: string | null;
     currentDate: Date;
@@ -66,4 +68,3 @@ declare module '@nekazari/sdk' {
 
   export function useViewer(): ViewerContextValue;
 }
-
