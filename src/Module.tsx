@@ -24,7 +24,7 @@ export default defineModule({
   description: 'NKZ Water Studio — watershed delineation, DEM analysis, and hydrological modeling for precision agriculture.',
 
   // === UI ===
-  accent: { base: '#3B82F6', soft: '#DBEAFE', strong: '#1D4ED8' },
+  accent: { base: '#06B6D4', soft: '#CFFAFE', strong: '#0891B2' },
   icon: 'droplets',
   main: MainPage,
 
@@ -34,7 +34,7 @@ export default defineModule({
     section: 'modules',
     priority: 45,
   },
-  slots: moduleSlots,
+  slots: moduleSlots as never,
 
   // === Backend ===
   api: { basePath: '/api/v1/hydrology' },
@@ -48,7 +48,7 @@ export default defineModule({
   // reads/writes. The gateway will block requests for anything else.
   // Use ['*'] as wildcard to opt out (not recommended for production).
   data: {
-    entities: ['AgriParcelRecord', 'AgriParcelZone'],
+    entities: ['AgriParcelRecord', 'AgriParcelZone', 'nkz:HydrologyDesign'],
     timeseries: ['AgriParcelRecord'],
   },
 });

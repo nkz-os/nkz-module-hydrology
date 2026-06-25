@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "vite --port 5003",
-    "build:module": "vite build",
+    "build:module": "vite build && node tools/generate-manifest.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
