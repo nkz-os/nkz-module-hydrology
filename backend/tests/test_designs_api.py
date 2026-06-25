@@ -38,25 +38,19 @@ def test_export_requires_auth():
     assert resp.status_code == 401
 
 
-def test_generation_endpoints_return_stub():
-    """All 4 generation endpoints should return 200 with status field."""
+def test_generation_endpoints_require_auth():
+    """All 4 generation endpoints require auth (return 401 without)."""
     from app.api.designs import router
     app = FastAPI()
     app.include_router(router)
-
     client = TestClient(app)
 
     endpoints = [
-        ("/design/keyline/generate",
-         {"parcel_id": "p1", "grade": 0.005, "spacing": 12, "lines": 7}),
-        ("/design/pond/score",
-         {"parcel_id": "p1", "center": [0, 0], "radius": 30, "depth": 2}),
-        ("/design/swale/suggest",
-         {"parcel_id": "p1", "bank_height": 1.5, "trench_depth": 0.4, "trench_width": 1.2}),
-        ("/design/check-dam/suggest",
-         {"parcel_id": "p1", "height": 0.6, "width": 1.2}),
+        "/design/keyline/generate",
+        "/design/pond/score",
+        "/design/swale/suggest",
+        "/design/check-dam/suggest",
     ]
-    for url, body in endpoints:
-        resp = client.post(url, json=body)
-        assert resp.status_code == 200, f"{url} returned {resp.status_code}"
-        assert "status" in resp.json(), f"{url} missing status"
+    for url in endpoints:
+        resp = client.post(url, json={"parcel_id": "p1"})
+        assert resp.status_code == 401, f"{url} returned {resp.status_code}"

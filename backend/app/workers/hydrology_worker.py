@@ -337,7 +337,7 @@ def _is_flat(arr: np.ndarray) -> bool:
 
 
 def _upload_results(parcel_id: str, tenant_id: str, result: dict) -> None:
-    """Upload PMTiles + GeoJSON to MinIO (tenant-scoped)."""
+    """Upload PMTiles + rasters + GeoJSON to MinIO (tenant-scoped)."""
     try:
         tile_service.generate_twi_pmtiles(
             parcel_id, tenant_id, result["twi.tif"],
@@ -348,14 +348,21 @@ def _upload_results(parcel_id: str, tenant_id: str, result: dict) -> None:
         _put_geojson(parcel_id, tenant_id, result["streams.geojson"])
     except Exception:
         logger.exception("streams upload failed")
+    # Ronda 2.6+: persist derived rasters for the design API endpoints
+    for raster_name in ("breached.tif", "accum.tif", "slope.tif"):
+        if raster_name in result:
+            try:
+                _put_raster(parcel_id, tenant_id, raster_name, result[raster_name])
+            except Exception:
+                logger.exception("%s upload failed", raster_name)
 
 
-def _put_geojson(parcel_id: str, tenant_id: str, geojson_bytes: bytes) -> None:
+def _put_raster(parcel_id: str, tenant_id: str, raster_name: str, data: bytes) -> None:
     from app.services.s3 import get_s3_client
     settings = get_settings()
-    key = tile_service.stream_network_key(parcel_id, tenant_id)
+    key = f"hydrology/{tenant_id}/{_parcel_short(parcel_id)}/{raster_name}"
     get_s3_client().put_object(Bucket=settings.minio_bucket, Key=key,
-                               Body=geojson_bytes, ContentType="application/geo+json")
+                               Body=data, ContentType="image/tiff")
 
 
 def _compute_metrics(result: dict) -> dict:

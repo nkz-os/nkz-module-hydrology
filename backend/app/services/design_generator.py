@@ -20,6 +20,27 @@ def _read_dem(dem_bytes: bytes) -> tuple[np.ndarray, rasterio.Affine]:
         return ds.read(1), ds.transform
 
 
+def _raster_key(parcel_id: str, tenant_id: str, raster_name: str) -> str:
+    """MinIO key for a stored raster."""
+    short = parcel_id.rsplit(":", 1)[-1] if ":" in parcel_id else parcel_id
+    return f"hydrology/{tenant_id}/{short}/{raster_name}"
+
+
+def download_raster(parcel_id: str, tenant_id: str, raster_name: str):  # -> Optional[bytes]
+    """Download a raster GeoTIFF from MinIO. Returns None if not found."""
+    from app.services.s3 import get_s3_client
+    from app.config import get_settings
+    import botocore.exceptions as boto_err
+    s3 = get_s3_client()
+    settings = get_settings()
+    key = _raster_key(parcel_id, tenant_id, raster_name)
+    try:
+        resp = s3.get_object(Bucket=settings.minio_bucket, Key=key)
+        return resp["Body"].read()
+    except (boto_err.ClientError, Exception):
+        return None
+
+
 # ── Keyline parallels ─────────────────────────────────────────────────
 
 def generate_keyline_parallels(

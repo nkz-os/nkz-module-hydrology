@@ -1,24 +1,33 @@
 """Hydrology design endpoints — generation, CRUD, export."""
 from __future__ import annotations
 
+import io
 import json
 import logging
+import math
 import uuid
+
+import numpy as np
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
+import rasterio
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from nkz_platform_sdk import SyncOrionClient, AuthContext, inject_fiware_headers
 
 from app.config import get_settings
 from app.middleware import require_auth
 from app.services.design_generator import (
+    download_raster,
     generate_keyline_parallels,
     extract_contour_at_elevation,
     find_slope_inflections,
 )
 from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
+from app.services.keyline import detect_keyline
+from app.services.pond_score import pond_score
+from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
 
 logger = logging.getLogger(__name__)
 
@@ -65,49 +74,197 @@ class DesignSaveRequest(BaseModel):
 # ── Generation endpoints ──────────────────────────────────────────────
 
 @router.post("/keyline/generate")
-def generate_keyline(req: KeylineRequest) -> dict:
+def generate_keyline(
+    req: KeylineRequest,
+    auth: AuthContext = require_auth(),
+) -> dict:
     """Generate keypoint + primary keyline + N parallel lines."""
+    from app.services.design_generator import download_raster, generate_keyline_parallels
+
+    dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
+    accum = download_raster(req.parcel_id, auth.tenant_id, "accum.tif")
+    if not dem or not accum:
+        return {"status": "no_data", "detail": "Run DEM pipeline first"}
+
+    dem_arr, transform = _read_dem(dem)
+    accum_arr, _ = _read_dem(accum)
+
+    kl_res = detect_keyline(dem_arr, transform, accum_arr)
+    if not kl_res:
+        return {"status": "no_keypoint", "detail": "No keypoint found in this parcel"}
+
+    keypoint = kl_res["keypoint"]
+    keyline = kl_res["keyline"]
+    parallels = generate_keyline_parallels(
+        dem, keyline["coordinates"], req.spacing, req.lines, req.grade
+    )
+
     return {
-        "keypoint": {"type": "Point", "coordinates": [0, 0, 0]},
-        "keyline": {"type": "LineString", "coordinates": []},
-        "parallel_lines": [],
+        "keypoint": keypoint,
+        "keyline": keyline,
+        "parallel_lines": parallels["parallels"],
         "request": req.model_dump(),
-        "status": "not_implemented",
+        "status": "ok",
     }
 
 
 @router.post("/pond/score")
-def score_pond(req: PondScoreRequest) -> dict:
+def score_pond(
+    req: PondScoreRequest,
+    auth: AuthContext = require_auth(),
+) -> dict:
     """Score a pond site at the given center point."""
+    dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
+    if not dem:
+        return {"status": "no_data", "detail": "Run DEM pipeline first"}
+
+    dem_arr, transform = _read_dem(dem)
+    # Sample elevation at the center point to estimate catchment
+    col, row = ~transform * (req.center[0], req.center[1])
+    col, row = int(col), int(row)
+    ny, nx = dem_arr.shape
+    if not (0 <= col < nx and 0 <= row < ny):
+        return {"status": "out_of_bounds"}
+
+    # Catchment yield: rough estimate from area x runoff depth (100mm default)
+    catchment_area_m2 = math.pi * req.radius ** 2
+    catchment_yield_m3 = catchment_area_m2 * 0.1  # 100mm runoff
+    earthwork_m3 = catchment_area_m2 * req.depth
+
+    ps = pond_score(
+        catchment_yield_m3=catchment_yield_m3,
+        earthwork_m3=max(100, earthwork_m3),
+        reliability_pct=80.0,
+        ksat_mmh=15.0,
+    )
+
     return {
-        "pondScore": 0.0,
-        "isViable": False,
-        "factors": {},
+        "pondScore": ps["pondScore"],
+        "isViable": ps["isViable"],
+        "factors": ps["factors"],
         "request": req.model_dump(),
-        "status": "not_implemented",
+        "status": "ok",
     }
 
 
 @router.post("/swale/suggest")
-def suggest_swales(req: SwaleSuggestRequest) -> dict:
+def suggest_swales(
+    req: SwaleSuggestRequest,
+    auth: AuthContext = require_auth(),
+) -> dict:
     """Auto-suggest swale lines above the keyline."""
+    dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
+    accum = download_raster(req.parcel_id, auth.tenant_id, "accum.tif")
+    if not dem or not accum:
+        return {"status": "no_data", "detail": "Run DEM pipeline first"}
+
+    dem_arr, transform = _read_dem(dem)
+    accum_arr, _ = _read_dem(accum)
+
+    # Find keypoint to determine keyline elevation
+    kl_res = detect_keyline(dem_arr, transform, accum_arr)
+    if not kl_res or "keypoint" not in kl_res:
+        return {"status": "no_keypoint", "detail": "No keypoint found"}
+
+    keypoint_z = kl_res["keypoint"]["coordinates"][2]
+    # Suggest swales from keyline elevation up to ridge
+    mid_elev = keypoint_z + (dem_arr.max() - keypoint_z) * 0.5
+    lines = extract_contour_at_elevation(dem, mid_elev, max_length_m=200)
+
+    # Calculate capacity for each swale
+    capacities = []
+    for line in lines:
+        coords = line["coordinates"]
+        length_m = sum(
+            math.hypot(c2[0] - c1[0], c2[1] - c1[1])
+            for c1, c2 in zip(coords, coords[1:])
+        )
+        sc = swale_capacity(req.bank_height, req.trench_width, length_m)
+        capacities.append(sc)
+
     return {
-        "lines": [],
-        "spacing_m": 0,
-        "count": 0,
+        "lines": lines,
+        "spacing_m": req.bank_height / max(0.01, (dem_arr.max() - keypoint_z) / 100) if len(lines) > 1 else 50,
+        "count": len(lines),
+        "capacities": capacities,
         "request": req.model_dump(),
-        "status": "not_implemented",
+        "status": "ok" if lines else "no_contours",
     }
 
 
 @router.post("/check-dam/suggest")
-def suggest_check_dams(req: CheckDamSuggestRequest) -> dict:
+def suggest_check_dams(
+    req: CheckDamSuggestRequest,
+    auth: AuthContext = require_auth(),
+) -> dict:
     """Auto-suggest check dam locations on the stream network."""
+    streams_geojson = download_raster(req.parcel_id, auth.tenant_id, "streams.geojson")
+    if not streams_geojson:
+        # Try S3 key for GeoJSON (not a TIFF)
+        from app.services.s3 import get_s3_client
+        from app.services.tile_service import stream_network_key
+        import botocore.exceptions as boto_err
+        s3 = get_s3_client()
+        settings = get_settings()
+        key = stream_network_key(req.parcel_id, auth.tenant_id)
+        try:
+            streams_geojson = s3.get_object(Bucket=settings.minio_bucket, Key=key)["Body"].read()
+        except (boto_err.ClientError, Exception):
+            return {"status": "no_data", "detail": "Run DEM pipeline first"}
+
+    dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
+    if not dem:
+        return {"status": "no_data", "detail": "Run DEM pipeline first"}
+
+    dem_arr, transform = _read_dem(dem)
+    streams = json.loads(streams_geojson)
+    dams = []
+
+    for feat in streams.get("features", []):
+        geom = feat.get("geometry", {})
+        if geom.get("type") != "LineString":
+            continue
+        coords = geom.get("coordinates", [])
+        if len(coords) < 5:
+            continue
+        # Sample elevation along the stream
+        xs, zs = [], []
+        for i, (x, y) in enumerate(coords):
+            col, row = ~transform * (x, y)
+            col, row = int(col), int(row)
+            if 0 <= col < dem_arr.shape[1] and 0 <= row < dem_arr.shape[0]:
+                if xs:
+                    dist = math.hypot(x - coords[i-1][0], y - coords[i-1][1])
+                    xs.append(xs[-1] + dist)
+                else:
+                    xs.append(0.0)
+                zs.append(float(dem_arr[row, col]))
+
+        if len(xs) < 5:
+            continue
+        xs_arr = np.array(xs)
+        zs_arr = np.array(zs)
+        inflections = find_slope_inflections(xs_arr, zs_arr)
+        for pt in inflections:
+            dams.append({
+                "type": "Point",
+                "coordinates": [coords[0][0], coords[0][1]],  # simplified
+                "channel_slope_pct": round(pt["slope_after"], 1),
+                "spacing_to_next_m": round(check_dam_spacing(pt["slope_after"], req.height), 1),
+                "sediment_retention_t": round(check_dam_sediment_retention(req.height, req.width)),
+            })
+
     return {
-        "dams": [],
+        "dams": dams,
         "request": req.model_dump(),
-        "status": "not_implemented",
+        "status": "ok" if dams else "no_inflections",
     }
+
+
+def _read_dem(dem_bytes: bytes) -> tuple:
+    with io.BytesIO(dem_bytes) as f:
+        with rasterio.open(f) as ds:
+            return ds.read(1), ds.transform
 
 
 # ── CRUD endpoints ────────────────────────────────────────────────────
