@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend:5ee6784
+          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend:9af58b1f21f7d1a7b4d509b24d49c4192ed278d4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
