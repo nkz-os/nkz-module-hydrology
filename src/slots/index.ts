@@ -1,26 +1,44 @@
-/**
- * Slot definitions — declare which host slots this module occupies.
- *
- * Each entry is `{ id, component, priority? }` where `component` is the
- * actual React component reference. The module-kit translates this into
- * the runtime SlotWidgetDefinition shape automatically.
- *
- * Available slot types:
- *   map-layer         — overlay or toolbar button on the 3D map
- *   layer-toggle      — toggle entry in the layer panel
- *   context-panel     — side panel shown when an entity is selected
- *   bottom-panel      — tabbed panel at the bottom of the viewer
- *   entity-tree       — context menu entry in the entity tree
- *   dashboard-widget  — card in the tenant dashboard
- */
-import { ExampleSlot } from '../components/slots/ExampleSlot';
-
 export const moduleSlots = {
+  'map-layer': [
+    {
+      id: 'hydrology-zonal',
+      moduleId: 'hydrology',
+      component: 'HydrologyZonalLayer',
+      localComponent: () => import('../components/HydrologyZonalLayer'),
+      priority: 15,
+    },
+    {
+      id: 'hydrology-twi',
+      moduleId: 'hydrology',
+      component: 'HydrologyTWITilesLayer',
+      localComponent: () => import('../components/HydrologyTWITilesLayer'),
+      priority: 16,
+    },
+    {
+      id: 'hydrology-design',
+      moduleId: 'hydrology',
+      component: 'HydrologyDesignLayer',
+      localComponent: () => import('../components/HydrologyDesignLayer'),
+      priority: 20,
+    },
+  ],
+  'layer-toggle': [
+    {
+      id: 'hydrology-toggle',
+      moduleId: 'hydrology',
+      component: 'HydrologyLayerToggle',
+      localComponent: () => import('../components/HydrologyLayerToggle'),
+      priority: 15,
+    },
+  ],
   'context-panel': [
     {
-      id: 'hydrology-context',
-      component: ExampleSlot,
-      priority: 10,
+      id: 'hydrology-panel',
+      moduleId: 'hydrology',
+      component: 'HydrologyContextPanel',
+      localComponent: () => import('../components/HydrologyContextPanel'),
+      priority: 15,
+      showWhen: { entityType: ['AgriParcel'] },
     },
   ],
 };
