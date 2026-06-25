@@ -30,6 +30,13 @@ _RECORD_METRICS: dict[str, str] = {
     "temperatureAvg": "nkz:temperatureAvg",
     "temperatureMin": "nkz:temperatureMin",
     "soilMoisture": "nkz:soilMoisture",
+    # Agronomic KPIs (Ronda 2.5)
+    "runoffMm": "nkz:runoffMm",
+    "peakFlowM3s": "nkz:peakFlowM3s",
+    "sedimentYieldTonnes": "nkz:sedimentYieldTonnes",
+    "soilSaturationPct": "nkz:soilSaturationPct",
+    "keylineGrade": "nkz:keylineGrade",
+    "pondViability": "nkz:pondViability",
 }
 
 _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}

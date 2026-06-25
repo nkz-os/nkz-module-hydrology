@@ -6,11 +6,13 @@ import numpy as np
 import h3
 from rasterio.transform import xy
 from typing import Optional
+from pyproj import Transformer
 
 
 def raster_to_h3_twi(
     twi: np.ndarray,
     transform,
+    src_crs: str,
     resolution: int = 9,
     nodata: Optional[float] = None,
 ) -> dict[str, float]:
@@ -31,12 +33,16 @@ def raster_to_h3_twi(
     # Sample every 2nd pixel for speed on large rasters
     step = max(1, min(nx, ny) // 100)
 
+    # Transformer from source CRS to WGS84
+    transformer = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+
     for y in range(0, ny, step):
         for x in range(0, nx, step):
             val = twi[y, x]
             if nodata is not None and (np.isnan(val) or val == nodata):
                 continue
-            lon, lat = xy(transform, y, x)
+            x_proj, y_proj = xy(transform, y, x)
+            lon, lat = transformer.transform(x_proj, y_proj)
             hex_id = h3.latlng_to_cell(lat, lon, resolution)
             if hex_id not in hex_values:
                 hex_values[hex_id] = []

@@ -77,7 +77,7 @@ def detect_keyline(
             break
         col -= 1
         current_z = dem[row, col]
-        expected_z = guide_points[-1][1] - target_drop * step * abs(transform.a)
+        expected_z = keypoint_z - target_drop * (step + 1)
 
         # Find row that minimizes error with expected elevation
         best_row = row

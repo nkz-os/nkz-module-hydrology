@@ -18,7 +18,7 @@ def sample_twi():
 def test_raster_to_h3_twi_returns_dict(sample_twi):
     from app.services.h3_indexer import raster_to_h3_twi
     twi, transform = sample_twi
-    result = raster_to_h3_twi(twi, transform, resolution=9)
+    result = raster_to_h3_twi(twi, transform, src_crs="EPSG:25830", resolution=9)
     assert isinstance(result, dict)
     assert len(result) > 0
     for hex_id, mean_val in result.items():
@@ -31,7 +31,7 @@ def test_raster_to_h3_ignores_nodata(sample_twi):
     from app.services.h3_indexer import raster_to_h3_twi
     twi, transform = sample_twi
     twi[0, 0] = -9999
-    result = raster_to_h3_twi(twi, transform, nodata=-9999)
+    result = raster_to_h3_twi(twi, transform, src_crs="EPSG:25830", nodata=-9999)
     assert len(result) > 0
 
 

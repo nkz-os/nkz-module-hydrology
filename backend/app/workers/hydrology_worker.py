@@ -29,6 +29,11 @@ from app.services.entity_publisher import build_hydrology_record, build_hydrolog
 from app.services.geolibre_engine import GeoLibreEngine
 from app.services.utm import reproject_grid_to_utm
 from app.services.weather_client import WeatherClient, WeatherUnavailable, ParcelWeather
+from app.services.bucket_model import BucketModel
+from app.services.scs_cn import runoff
+from app.services.musle import musle_sediment, ls_from_slope, c_from_ndvi
+from app.services.keyline import detect_keyline
+from app.services.pond_score import pond_score
 from app.services import tile_service, records_publish
 
 logger = logging.getLogger(__name__)
@@ -112,6 +117,60 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     metrics = _compute_metrics(result)
     if weather:
         _merge_weather_metrics(metrics, weather)
+
+    # ── Agronomic Models (Ronda 2.5) ────────────
+    # Default parameters to be retrieved from Orion-LD/API in future rounds
+    cn2 = 80.0
+    ndvi_mean = 0.4
+    ksat_mmh = 15.0
+    field_cap = 0.25
+    wilt_pt = 0.10
+    k_factor = 0.30
+
+    precip = weather.precipitation_mm if weather and weather.precipitation_mm is not None else 0.0
+    eto = weather.eto_mm if weather and weather.eto_mm is not None else 0.0
+
+    # 1. SCS-CN
+    run_mm, peak_m3s = runoff(precip, cn2)
+    metrics["runoffMm"] = run_mm
+    metrics["peakFlowM3s"] = peak_m3s
+
+    # 2. Bucket Model
+    bucket = BucketModel(ksat_mmh=ksat_mmh, field_capacity_vv=field_cap, wilting_point_vv=wilt_pt)
+    b_res = bucket.step(precip, eto, cn=cn2)
+    metrics["soilSaturationPct"] = b_res["saturation_pct"]
+
+    # 3. MUSLE
+    slope_mean = metrics.get("slopeMean", 5.0)
+    ls_fact = ls_from_slope(slope_mean)
+    c_fact = c_from_ndvi(ndvi_mean)
+    runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0
+    sediment = musle_sediment(runoff_m3, peak_m3s, k_factor, ls_fact, c_fact)
+    metrics["sedimentYieldTonnes"] = sediment
+
+    # 4. Pond Viability
+    try:
+        ps = pond_score(
+            catchment_yield_m3=runoff_m3,
+            earthwork_m3=1000.0,
+            reliability_pct=80.0,
+            ksat_mmh=ksat_mmh
+        )
+        metrics["pondViability"] = ps["pondScore"]
+    except Exception as e:
+        logger.warning("[%s] pond_score failed: %s", job_id, e)
+
+    # 5. Keyline Guide
+    try:
+        with rasterio.open(io.BytesIO(utm_dem)) as ds:
+            utm_transform = ds.transform
+        breached_arr = _read_raster(breached)
+        accum_arr = _read_raster(accum)
+        kl_res = detect_keyline(breached_arr, utm_transform, accum_arr)
+        if kl_res and "properties" in kl_res:
+            metrics["keylineGrade"] = kl_res["properties"].get("grade", 0.0)
+    except Exception as e:
+        logger.warning("[%s] keyline detect failed: %s", job_id, e)
     record = build_hydrology_record(
         tenant_id=tenant_id or "platform", parcel_id=parcel_id,
         geometry=geometry, observed_at=observed_at, metrics=metrics,

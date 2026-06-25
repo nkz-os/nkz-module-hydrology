@@ -35,3 +35,4 @@ black>=24.1.0
 ruff>=0.1.0
 h3>=4.0.0
 shapely>=2.0.4
+pyproj>=3.6.0
