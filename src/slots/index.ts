@@ -8,13 +8,6 @@ export const moduleSlots = {
       priority: 15,
     },
     {
-      id: 'hydrology-twi',
-      moduleId: 'hydrology',
-      component: 'HydrologyTWITilesLayer',
-      localComponent: () => import('../components/HydrologyTWITilesLayer'),
-      priority: 16,
-    },
-    {
       id: 'hydrology-design',
       moduleId: 'hydrology',
       component: 'HydrologyDesignLayer',
