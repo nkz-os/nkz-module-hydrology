@@ -160,6 +160,17 @@ def pmtiles_exists(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> 
         return False
 
 
+def twi_pmtiles_key(parcel_id: str, tenant_id: str) -> str:
+    """Public API alias for _pmtiles_key (tenant-scoped TWI PMTiles key)."""
+    return _pmtiles_key(parcel_id, tenant_id, "twi")
+
+
+def get_public_url(key: str) -> str:
+    """Build the public MinIO URL for a given object key."""
+    settings = get_settings()
+    return f"{settings.minio_public_url}/{settings.minio_bucket}/{key}"
+
+
 def get_pmtiles_url(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> Optional[str]:
     """Get the public URL for an existing PMTiles file.
 

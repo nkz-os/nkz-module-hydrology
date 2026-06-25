@@ -11,6 +11,7 @@ from app.api.analyze import router as analyze_router
 from app.api.jobs import router as jobs_router
 from app.api.setup import router as setup_router
 from app.api.visualization import router as visualization_router
+from app.api.designs import router as designs_router
 
 
 # =============================================================================
@@ -24,3 +25,4 @@ router.include_router(analyze_router)
 router.include_router(jobs_router)
 router.include_router(setup_router)
 router.include_router(visualization_router)
+router.include_router(designs_router)
