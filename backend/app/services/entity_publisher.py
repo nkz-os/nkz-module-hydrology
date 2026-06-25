@@ -37,6 +37,9 @@ _RECORD_METRICS: dict[str, str] = {
     "soilSaturationPct": "nkz:soilSaturationPct",
     "keylineGrade": "nkz:keylineGrade",
     "pondViability": "nkz:pondViability",
+    # Source tracking (orion vs default) — Ronda 2.6
+    "soilSource": "nkz:soilSource",
+    "vegetationSource": "nkz:vegetationSource",
 }
 
 _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}
@@ -111,7 +114,7 @@ def build_hydrology_record(
         attr = _RECORD_METRICS.get(metric_name)
         if attr is None or value is None or isinstance(value, (dict, list)):
             continue
-        entity[attr] = {"type": "Property", "value": float(value), "observedAt": observed_at}
+        entity[attr] = {"type": "Property", "value": value if isinstance(value, str) else float(value), "observedAt": observed_at}
     return entity
 
 

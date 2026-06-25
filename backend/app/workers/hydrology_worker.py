@@ -128,6 +128,8 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
         "[%s] Orion context: cn=%.0f ksat=%.1f ndvi=%.2f (%s) soil_source=%s",
         job_id, soil.cn, soil.ksat_mmh, ndvi_mean, ndvi_source, soil.source,
     )
+    metrics["soilSource"] = soil.source
+    metrics["vegetationSource"] = ndvi_source
 
     precip = weather.precipitation_mm if weather and weather.precipitation_mm is not None else 0.0
     eto = weather.eto_mm if weather and weather.eto_mm is not None else 0.0
