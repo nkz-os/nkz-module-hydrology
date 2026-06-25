@@ -158,13 +158,8 @@ class TestGeoLibreEngine:
 
 # ── Characterization of the geolibre-wasm 0.4.4 crash family ──────────
 # See internal-docs-local/issues/geolibre-d8-trap.md. `basins`/`subbasins`
-# trap with the same shared WASM error as the D8 tools. This xfails now and
-# will xpass once upstream fixes it; strict=True then fails the suite so we
-# remember to drop the numpy/watershed workarounds. `watershed` itself is NOT
-# broken (it just needs a vector pour-point file), so no xfail for it.
-@pytest.mark.xfail(strict=True,
-                   reason="geolibre-wasm 0.4.4: basins traps (wasm fn 7349)")
-def test_basins_traps(synthetic_dem):
+# Verified: basins and all D8 tools work in geolibre-wasm 0.5.1.
+def test_basins_works(synthetic_dem):
     from app.services.geolibre_engine import GeoLibreEngine
     eng = GeoLibreEngine()
     breached = eng.breach_depressions(synthetic_dem)

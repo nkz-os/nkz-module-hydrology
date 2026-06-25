@@ -28,9 +28,10 @@ nkz-platform-sdk>=0.4.1
 minio>=7.2.0
 
 # Geo / WASM
-geolibre-wasm==0.4.4  # pin: d8 tools crash in 0.4.4
+geolibre-wasm==0.5.1  # pin: D8 tools fixed (wasm thread-spawn trap resolved in 0.5.1)
 
 # Development
 black>=24.1.0
 ruff>=0.1.0
 h3>=4.0.0
+shapely>=2.0.4

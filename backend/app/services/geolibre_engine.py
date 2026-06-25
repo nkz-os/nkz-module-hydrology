@@ -77,14 +77,9 @@ class GeoLibreError(Exception):
 
 # Denylist: tools that crash with WASM unreachable in geolibre-wasm 0.4.4.
 # Each maps to a clear error pointing to the workaround.
-_BROKEN_TOOLS: dict[str, str] = {
-    "d8_pointer": "crash in 0.4.4 — use engine.d8_pointer() (numpy workaround)",
-    "d8_flow_accum": "crash in 0.4.4 — use engine.flow_accumulation() (flow_accum_full_workflow)",
-    "fd8_flow_accum": "crash in 0.4.4 — use engine.flow_accumulation()",
-    "dinf_flow_accum": "crash in 0.4.4 — use engine.flow_accumulation()",
-    "basins": "crash in 0.4.4 — use engine.catchment_from_point() (numpy BFS)",
-    "subbasins": "crash in 0.4.4 — use engine.catchment_from_point()",
-}
+# All tools verified working in geolibre-wasm 0.5.1.
+# Keep as safety net; if bugs resurface, add tool -> message entries here.
+_BROKEN_TOOLS: dict[str, str] = {}
 
 
 class GeoLibreEngine:
@@ -100,7 +95,7 @@ class GeoLibreEngine:
         if tool_id in _BROKEN_TOOLS:
             raise GeoLibreError(
                 tool_id,
-                f"BROKEN in geolibre-wasm 0.4.4 — {_BROKEN_TOOLS[tool_id]}",
+                f"BROKEN: {_BROKEN_TOOLS[tool_id]}",
             )
         try:
             result = gl.run_tool(tool_id, args=args, input=input_files)
