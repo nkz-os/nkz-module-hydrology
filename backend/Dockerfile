@@ -7,6 +7,7 @@ WORKDIR /app
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    libexpat1-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install requirements
@@ -17,6 +18,11 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 FROM python:3.11-slim
 
 WORKDIR /app
+
+# Install runtime dependencies for rasterio/numpy
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libexpat1 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user first
 RUN useradd -m -u 1000 appuser
