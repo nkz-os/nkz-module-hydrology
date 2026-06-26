@@ -20,7 +20,7 @@ const TYPE_COLORS: Record<string, string> = {
   pond: 'DODGERBLUE',
 };
 
-const HydrologyDesignLayer: React.FC<Props> = ({ designs, visible = true }) => {
+const HydrologyDesignLayer: React.FC<Props> = ({ designs = [], visible = true }) => {
   const { cesiumViewer: viewer } = useViewer();
   const entitiesRef = useRef<any[]>([]);
 

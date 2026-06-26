@@ -11,7 +11,7 @@ interface Props {
   layers: LayerDef[];
 }
 
-const HydrologyLayerToggle: React.FC<Props> = ({ layers }) => (
+const HydrologyLayerToggle: React.FC<Props> = ({ layers = [] }) => (
   <div className="hydrology-layer-toggle space-y-1">
     {layers.map((l) => (
       <label key={l.id} className="flex items-center gap-2 text-xs cursor-pointer hover:bg-white/5 px-1 py-0.5 rounded">
