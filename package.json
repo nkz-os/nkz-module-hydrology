@@ -19,10 +19,12 @@
     "lucide-react": "^0.424.0"
   },
   "devDependencies": {
+    "@nekazari/design-tokens": "^0.1.0-alpha.0",
     "@nekazari/module-builder": "^2.0.0",
-    "@nekazari/module-kit": "^0.6.0",
-    "@nekazari/sdk": "^1.0.3",
-    "@nekazari/ui-kit": "^1.0.0",
+    "@nekazari/module-kit": "^0.7.0",
+    "@nekazari/sdk": "^1.1.0",
+    "@nekazari/ui-kit": "^1.0.2-alpha.4",
+    "@nekazari/viewer-kit": "^0.1.1-alpha.0",
     "@types/geojson": "^7946.0.16",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
@@ -32,7 +34,7 @@
     "postcss": "^8.4.39",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-i18next": "^15.0.0",
+    "react-i18next": "^14.1.0",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.2.2",
     "vite": "^5.3.1"
