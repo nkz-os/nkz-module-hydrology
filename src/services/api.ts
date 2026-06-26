@@ -1,14 +1,19 @@
-const API_BASE = (import.meta as any).env?.VITE_API_URL || 'https://nkz.robotika.cloud';
-const HYDRO_BASE = `${API_BASE}/api/v1/hydrology`;
+// Relative, same-origin path: the frontend host proxies /api/* to the gateway
+// and the httpOnly auth cookie only travels same-origin. Calling an absolute
+// cross-origin host (nkz.robotika.cloud) drops the cookie -> 401.
+const HYDRO_BASE = '/api/v1/hydrology';
 
-// Auth: the host exposes window.__nekazariAuthContext; inject the Keycloak
-// Bearer token so the api-gateway accepts the request (cookies are not used).
+// Auth is the httpOnly cookie (credentials: 'include'); the host intentionally
+// omits the token from window.__nekazariAuthContext. We only add X-Tenant-ID
+// and a mobile-WebView Bearer fallback, mirroring the other modules.
 function authHeaders(extra?: Record<string, string>): Record<string, string> {
   const ctx = typeof window !== 'undefined' ? (window as any).__nekazariAuthContext : undefined;
-  const token = ctx?.getToken?.() || ctx?.token;
+  const tenantId = ctx?.tenantId || ctx?.getTenantId?.();
+  const mobileToken = typeof window !== 'undefined' ? (window as any).__nekazariMobileToken : undefined;
   return {
     ...(extra || {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(tenantId ? { 'X-Tenant-ID': tenantId } : {}),
+    ...(mobileToken ? { Authorization: `Bearer ${mobileToken}` } : {}),
   };
 }
 
