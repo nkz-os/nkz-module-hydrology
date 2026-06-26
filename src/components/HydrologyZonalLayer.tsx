@@ -30,7 +30,7 @@ const HydrologyZonalLayer: React.FC<Props> = ({ parcelId, activeKpi = 'runoffMm'
   const entitiesRef = useRef<any[]>([]);
 
   useEffect(() => {
-    if (!viewer || !visible) return;
+    if (!viewer || !visible || !parcelId) return;
     let cancelled = false;
     const Cesium = (window as any).Cesium;
 

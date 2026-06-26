@@ -10,7 +10,9 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.getZones(parcelId).then(setZones).finally(() => setLoading(false));
+    if (!parcelId) { setLoading(false); return; }
+    setLoading(true);
+    api.getZones(parcelId).then(setZones).catch(() => setZones([])).finally(() => setLoading(false));
   }, [parcelId]);
 
   if (loading) return <p className="text-nkz-muted text-sm">{t('hydrology:loading')}</p>;

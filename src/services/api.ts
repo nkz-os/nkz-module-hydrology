@@ -1,8 +1,19 @@
 const API_BASE = (import.meta as any).env?.VITE_API_URL || 'https://nkz.robotika.cloud';
 const HYDRO_BASE = `${API_BASE}/api/v1/hydrology`;
 
+// Auth: the host exposes window.__nekazariAuthContext; inject the Keycloak
+// Bearer token so the api-gateway accepts the request (cookies are not used).
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const ctx = typeof window !== 'undefined' ? (window as any).__nekazariAuthContext : undefined;
+  const token = ctx?.getToken?.() || ctx?.token;
+  return {
+    ...(extra || {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 async function get<T>(path: string): Promise<T> {
-  const resp = await fetch(`${HYDRO_BASE}${path}`, { credentials: 'include' });
+  const resp = await fetch(`${HYDRO_BASE}${path}`, { headers: authHeaders(), credentials: 'include' });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return resp.json();
 }
@@ -10,7 +21,7 @@ async function get<T>(path: string): Promise<T> {
 async function post<T>(path: string, body: unknown): Promise<T> {
   const resp = await fetch(`${HYDRO_BASE}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
     credentials: 'include',
   });
@@ -21,7 +32,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 async function put<T>(path: string, body: unknown): Promise<T> {
   const resp = await fetch(`${HYDRO_BASE}${path}`, {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(body),
     credentials: 'include',
   });
@@ -30,7 +41,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function del(path: string): Promise<void> {
-  await fetch(`${HYDRO_BASE}${path}`, { method: 'DELETE', credentials: 'include' });
+  await fetch(`${HYDRO_BASE}${path}`, { method: 'DELETE', headers: authHeaders(), credentials: 'include' });
 }
 
 export interface ZoneKpi {
