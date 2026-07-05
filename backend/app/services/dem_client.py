@@ -1,8 +1,7 @@
 """DEM client for hydrology: fetches a DEM grid from eu-elevation.
 
-Service-to-service (namespace `nekazari`), NO auth: eu-elevation's /raster is
-public (verified 2026-06-24). X-Tenant-ID is sent for observability only.
-When eu-elevation is hardened (see PENDING.md), add HMAC here.
+Cluster-internal call to elevation-api-service. Authenticated with
+X-Internal-Service-Secret (see eu-elevation require_elevation_reader).
 """
 from __future__ import annotations
 
@@ -60,7 +59,12 @@ class DEMClient:
             "max_lon": max_lon, "max_lat": max_lat,
             "resolution_m": resolution_m,
         }
-        headers = {"X-Tenant-ID": tenant_id} if tenant_id else {}
+        headers: dict[str, str] = {}
+        if tenant_id:
+            headers["X-Tenant-ID"] = tenant_id
+        secret = get_settings().internal_service_secret
+        if secret:
+            headers["X-Internal-Service-Secret"] = secret
         try:
             resp = httpx.get(
                 f"{self.base_url}/api/elevation/raster",
