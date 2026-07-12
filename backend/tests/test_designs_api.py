@@ -1,6 +1,24 @@
 """Tests for design API endpoints."""
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
+
+
+def test_list_designs_query_uses_or_pipe():
+    """list_designs must OR relationship terms with `|`, not `,` (NGSI-LD)."""
+    from app.api import designs
+
+    pid = "urn:ngsi-ld:AgriParcel:p1"
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.query_entities.return_value = []
+        designs.list_designs(parcel_id=pid, auth=SimpleNamespace(tenant_id="t1"))
+
+    _, kwargs = MockOrion.return_value.query_entities.call_args
+    q = kwargs["q"]
+    assert q == f'(hasAgriParcel=="{pid}"|refAgriParcel=="{pid}")'
+    assert "|" in q and "," not in q
 
 
 def test_list_designs_requires_auth():

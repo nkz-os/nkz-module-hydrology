@@ -279,7 +279,7 @@ def list_designs(
         orion = SyncOrionClient(auth.tenant_id)
         entities = orion.query_entities(
             type="nkz:HydrologyDesign",
-            q=f'hasAgriParcel=="{parcel_id}",refAgriParcel=="{parcel_id}"',
+            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
         )
         return entities
     except Exception as e:

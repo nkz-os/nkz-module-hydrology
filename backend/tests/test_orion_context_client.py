@@ -139,3 +139,76 @@ class TestOrionContextClient:
 
         assert ndvi == 0.80  # latest date wins
         assert source == "orion"
+
+    # ── NGSI-LD query correctness (Task 2) ────────────────────────────
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_soil_query_uses_or_pipe_and_keyvalues(self, MockOrion):
+        """Relationship terms OR'd with `|`, no `,`, and options=keyValues."""
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = []
+        pid = "urn:ngsi-ld:AgriParcel:p1"
+
+        with OrionContextClient("test-tenant") as client:
+            client.get_soil_context(pid)
+
+        _, kwargs = mock_orion.query_entities.call_args
+        q = kwargs["q"]
+        assert q == f'(hasAgriParcel=="{pid}"|refAgriParcel=="{pid}")'
+        assert "|" in q
+        assert "," not in q
+        assert kwargs["options"] == "keyValues"
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_ndvi_query_uses_or_pipe_and_keyvalues(self, MockOrion):
+        """EOProduct compound q: OR relationship group then ;indexType, keyValues."""
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = []
+        pid = "urn:ngsi-ld:AgriParcel:p1"
+
+        with OrionContextClient("test-tenant") as client:
+            client.get_ndvi_mean(pid)
+
+        _, kwargs = mock_orion.query_entities.call_args
+        q = kwargs["q"]
+        assert q == f'(hasAgriParcel=="{pid}"|refAgriParcel=="{pid}");indexType=="NDVI"'
+        assert "|" in q
+        # No comma OR between the relationship terms
+        assert '",refAgriParcel' not in q
+        assert kwargs["options"] == "keyValues"
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_soil_parses_keyvalues_scalar_entity(self, MockOrion):
+        """keyValues AgriSoil (scalar attrs) -> source='orion' with correct CN/K."""
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = [{
+            "usdaTextureClass": "clay_loam",
+            "Ksaturation": 4.2,
+            "fieldCapacity": 0.30,
+            "wiltingPoint": 0.15,
+        }]
+
+        with OrionContextClient("test-tenant") as client:
+            ctx = client.get_soil_context("urn:ngsi-ld:AgriParcel:p1")
+
+        assert ctx.source == "orion"
+        assert ctx.cn == 85  # clay_loam -> HSG C -> row_crops CN 85
+        assert ctx.ksat_mmh == 4.2
+        assert ctx.k_factor == 0.25  # clay_loam baseline
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_ndvi_parses_keyvalues_dict_date(self, MockOrion):
+        """dateObserved may arrive as {@type,@value} even under keyValues."""
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = [
+            {"meanValue": 0.55, "indexType": "NDVI",
+             "dateObserved": {"@type": "DateTime", "@value": "2026-06-10T00:00:00Z"}},
+            {"meanValue": 0.77, "indexType": "NDVI",
+             "dateObserved": {"@type": "DateTime", "@value": "2026-06-20T00:00:00Z"}},
+        ]
+
+        with OrionContextClient("test-tenant") as client:
+            ndvi, source = client.get_ndvi_mean("urn:ngsi-ld:AgriParcel:p1")
+
+        assert ndvi == 0.77
+        assert source == "orion"

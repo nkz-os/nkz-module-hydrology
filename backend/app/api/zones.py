@@ -23,7 +23,7 @@ def get_parcel_zones(
         orion = SyncOrionClient(auth.tenant_id)
         entities = orion.query_entities(
             type="AgriParcelZone",
-            q=f'hasAgriParcel=="{parcel_id}",refAgriParcel=="{parcel_id}"',
+            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
         )
         zones = []
         for e in entities:

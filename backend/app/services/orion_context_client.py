@@ -118,7 +118,8 @@ class OrionContextClient:
             # names per AGENTS §3 migration contract.
             entities = self.orion.query_entities(
                 type="AgriSoil",
-                q=f'hasAgriParcel=="{parcel_id}",refAgriParcel=="{parcel_id}"',
+                q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
+                options="keyValues",
             )
             if not entities:
                 logger.info("No AgriSoil found for parcel %s", parcel_id)
@@ -167,7 +168,8 @@ class OrionContextClient:
             # names per AGENTS §3 migration contract.
             entities = self.orion.query_entities(
                 type="EOProduct",
-                q=f'hasAgriParcel=="{parcel_id}",refAgriParcel=="{parcel_id}";indexType=="NDVI"',
+                q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}");indexType=="NDVI"',
+                options="keyValues",
             )
             if not entities:
                 logger.info("No EOProduct found for parcel %s", parcel_id)
