@@ -22,9 +22,13 @@ def _s3_client():
     return get_s3_client()
 
 
-def _parcel_short(parcel_id: str) -> str:
+def parcel_short(parcel_id: str) -> str:
     """Stable short id from a parcel URN (for object keys)."""
     return parcel_id.rsplit(":", 1)[-1]
+
+
+# Backwards-compatible alias for existing internal callers/tests.
+_parcel_short = parcel_short
 
 
 def _pmtiles_key(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> str:

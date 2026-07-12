@@ -67,19 +67,16 @@ async def check_flows_exist(parcel_id: str, ctx: AuthContext = require_auth()):
 @router.get("/{parcel_id}/kpis")
 async def get_kpis(parcel_id: str, ctx: AuthContext = require_auth()):
     """Get scenario KPIs for a parcel."""
-    import boto3
+    from app.services.s3 import get_s3_client
 
     settings = get_settings()
-    s3 = boto3.client("s3",
-        endpoint_url=f"http://{settings.minio_endpoint}",
-        aws_access_key_id=settings.minio_access_key,
-        aws_secret_access_key=settings.minio_secret_key,
-    )
+    s3 = get_s3_client()
     try:
         resp = s3.get_object(
             Bucket=settings.minio_bucket,
             Key=f"scenarios/{parcel_id}/kpis.json",
         )
         return json.loads(resp["Body"].read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        logger.warning("KPIs unavailable for %s: %s", parcel_id, exc)
         return {"baseline": {}, "intervention": {}}

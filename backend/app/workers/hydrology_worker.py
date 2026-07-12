@@ -37,6 +37,7 @@ from app.services.pond_score import pond_score
 from app.services.orion_context_client import OrionContextClient
 from app.services.zonal_stats import extract_zonal_stats
 from app.services import tile_service, records_publish
+from app.services.tile_service import parcel_short
 
 logger = logging.getLogger(__name__)
 
@@ -366,7 +367,7 @@ def _upload_results(parcel_id: str, tenant_id: str, result: dict) -> None:
 def _put_raster(parcel_id: str, tenant_id: str, raster_name: str, data: bytes) -> None:
     from app.services.s3 import get_s3_client
     settings = get_settings()
-    key = f"hydrology/{tenant_id}/{_parcel_short(parcel_id)}/{raster_name}"
+    key = f"hydrology/{tenant_id}/{parcel_short(parcel_id)}/{raster_name}"
     get_s3_client().put_object(Bucket=settings.minio_bucket, Key=key,
                                Body=data, ContentType="image/tiff")
 
