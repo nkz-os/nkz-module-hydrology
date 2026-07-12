@@ -364,6 +364,14 @@ def _upload_results(parcel_id: str, tenant_id: str, result: dict) -> None:
                 logger.exception("%s upload failed", raster_name)
 
 
+def _put_geojson(parcel_id: str, tenant_id: str, data: bytes) -> None:
+    from app.services.s3 import get_s3_client
+    settings = get_settings()
+    key = tile_service.stream_network_key(parcel_id, tenant_id)
+    get_s3_client().put_object(Bucket=settings.minio_bucket, Key=key,
+                               Body=data, ContentType="application/geo+json")
+
+
 def _put_raster(parcel_id: str, tenant_id: str, raster_name: str, data: bytes) -> None:
     from app.services.s3 import get_s3_client
     settings = get_settings()
