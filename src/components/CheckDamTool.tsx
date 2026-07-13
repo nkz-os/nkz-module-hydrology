@@ -42,7 +42,12 @@ const CheckDamTool: React.FC<Props> = ({ parcelId }) => {
               className="bg-nkz-accent text-white px-3 py-1 rounded text-sm w-full">
         {loading ? t('hydrology:loading') : t('hydrology:checkDam')}
       </button>
-      {result && <ExportMenu designType="check_dam" geometry={result} />}
+      {result && result.dams?.length > 0 && (
+        <ExportMenu
+          designType="check_dam"
+          geometry={{ type: 'MultiPoint', coordinates: result.dams.map((d: any) => d.coordinates) }}
+        />
+      )}
     </div>
   );
 };

@@ -1,6 +1,7 @@
-const ROUTING_BASE = (import.meta as any).env?.VITE_API_URL
-  ? `${(import.meta as any).env.VITE_API_URL}/api/routing`
-  : 'https://nkz.robotika.cloud/api/routing';
+// Relative, same-origin path: mirrors api.ts — the frontend host proxies /api/*
+// to the gateway and the httpOnly auth cookie only travels same-origin. An
+// absolute cross-origin host would drop the cookie -> 401.
+const ROUTING_BASE = '/api/routing';
 
 export async function exportToGisRouting(geojson: Record<string, unknown>): Promise<void> {
   const resp = await fetch(`${ROUTING_BASE}/zones/external/ingest`, {

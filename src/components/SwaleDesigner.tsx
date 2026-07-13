@@ -48,7 +48,12 @@ const SwaleDesigner: React.FC<Props> = ({ parcelId }) => {
               className="bg-nkz-accent text-white px-3 py-1 rounded text-sm w-full">
         {loading ? t('hydrology:loading') : t('hydrology:swaleDesigner')}
       </button>
-      {result && <ExportMenu designType="swale" geometry={result} />}
+      {result && result.lines?.length > 0 && (
+        <ExportMenu
+          designType="swale"
+          geometry={{ type: 'MultiLineString', coordinates: result.lines.map((l: any) => l.coordinates) }}
+        />
+      )}
     </div>
   );
 };

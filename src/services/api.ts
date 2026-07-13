@@ -46,7 +46,8 @@ async function put<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function del(path: string): Promise<void> {
-  await fetch(`${HYDRO_BASE}${path}`, { method: 'DELETE', headers: authHeaders(), credentials: 'include' });
+  const resp = await fetch(`${HYDRO_BASE}${path}`, { method: 'DELETE', headers: authHeaders(), credentials: 'include' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 }
 
 export interface ZoneKpi {
@@ -109,6 +110,18 @@ export interface CheckDamSuggestRequest {
   width: number;
 }
 
+export interface AnalyzeResponse {
+  job_id: string;
+  status: string;
+  [key: string]: unknown;
+}
+
+export interface JobStatus {
+  job_id: string;
+  status: 'queued' | 'started' | 'finished' | 'failed' | string;
+  [key: string]: unknown;
+}
+
 export interface DesignSaveRequest {
   parcel_id: string;
   design_type: 'keyline' | 'pond' | 'swale' | 'check_dam';
@@ -118,6 +131,11 @@ export interface DesignSaveRequest {
 }
 
 export const api = {
+  // DEM analysis (async job)
+  analyzeParcel: (parcelId: string) =>
+    post<AnalyzeResponse>(`/analyze/${encodeURIComponent(parcelId)}`, {}),
+  getJob: (jobId: string) => get<JobStatus>(`/jobs/${encodeURIComponent(jobId)}`),
+
   // Zones
   getZones: (parcelId: string) => get<ZoneKpi[]>(`/parcels/${encodeURIComponent(parcelId)}/zones`),
 
