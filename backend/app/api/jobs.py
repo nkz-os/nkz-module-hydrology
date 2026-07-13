@@ -21,6 +21,13 @@ async def get_job_status(job_id: str, ctx: AuthContext = require_auth()):
     except Exception:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Tenant scoping: worker enqueue is run_dem_pipeline(parcel_id, job_id, tenant_id).
+    # A job owned by another tenant (or with no tenant slot) is indistinguishable
+    # from a missing job — same 404 body, no cross-tenant info leak.
+    job_tenant = job.args[2] if job.args and len(job.args) >= 3 else None
+    if job_tenant != ctx.tenant_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
     result = {
         "job_id": job_id,
         "status": job.get_status(),

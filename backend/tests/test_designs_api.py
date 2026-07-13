@@ -2,6 +2,8 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from fastapi.testclient import TestClient
 from fastapi import FastAPI
 
@@ -72,3 +74,42 @@ def test_generation_endpoints_require_auth():
     for url in endpoints:
         resp = client.post(url, json={"parcel_id": "p1"})
         assert resp.status_code == 401, f"{url} returned {resp.status_code}"
+
+
+def test_get_design_404_hides_exception_text():
+    """get_design 404 must NOT leak the underlying exception (Orion URLs/internals)."""
+    from fastapi import HTTPException
+    from app.api import designs
+
+    secret = "orion-internal-http://orion:1026/secret-path"
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.side_effect = RuntimeError(secret)
+        with pytest.raises(HTTPException) as exc:
+            designs.get_design(design_id="d1", auth=SimpleNamespace(tenant_id="t1"))
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Design not found"
+    assert secret not in str(exc.value.detail)
+
+
+def test_create_design_500_hides_exception_text():
+    """create_design 500 must return a generic detail, not str(e)."""
+    from fastapi import HTTPException
+    from app.api import designs
+
+    secret = "orion-internal-http://orion:1026/secret-path"
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.create_entity.side_effect = RuntimeError(secret)
+        with pytest.raises(HTTPException) as exc:
+            designs.create_design(
+                req=designs.DesignSaveRequest(
+                    parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                    design_type="keyline",
+                    geometry={"type": "Point", "coordinates": [0, 0]},
+                ),
+                auth=SimpleNamespace(tenant_id="t1"),
+            )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Internal error"
+    assert secret not in str(exc.value.detail)

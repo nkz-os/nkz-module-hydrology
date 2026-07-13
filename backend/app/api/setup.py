@@ -15,6 +15,7 @@ Activate path:
 Deactivate/teardown: log-only (actual cleanup in later phases).
 """
 
+import hmac
 import logging
 
 from fastapi import APIRouter, HTTPException, Request
@@ -45,7 +46,7 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
     """Parcel activation lifecycle endpoint. Called by entity-manager."""
     internal_secret = get_settings().internal_service_secret
     secret = request.headers.get("X-Internal-Service-Secret", "")
-    if not internal_secret or secret != internal_secret:
+    if not internal_secret or not hmac.compare_digest(secret, internal_secret):
         logger.warning(
             "Unauthorized internal setup-parcel call from %s", request.client
         )

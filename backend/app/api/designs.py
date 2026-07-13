@@ -313,9 +313,9 @@ def create_design(
         orion = SyncOrionClient(tenant_id)
         orion.create_entity(entity)
         return {"id": entity["id"], "status": "created"}
-    except Exception as e:
+    except Exception:
         logger.exception("Failed to create design")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.get("/{design_id}")
@@ -327,8 +327,9 @@ def get_design(
     try:
         orion = SyncOrionClient(auth.tenant_id)
         return orion.get_entity(design_id)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except Exception:
+        logger.exception("Failed to get design %s", design_id)
+        raise HTTPException(status_code=404, detail="Design not found")
 
 
 @router.put("/{design_id}")
@@ -360,8 +361,9 @@ def update_design(
         resp = httpx.patch(url, json=attrs, headers=headers, timeout=10)
         resp.raise_for_status()
         return {"id": design_id, "version": version, "status": "updated"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to update design %s", design_id)
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.delete("/{design_id}")
@@ -374,8 +376,9 @@ def delete_design(
         orion = SyncOrionClient(auth.tenant_id)
         orion.delete_entity(design_id)
         return {"id": design_id, "status": "deleted"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Failed to delete design %s", design_id)
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # ── Export endpoint ────────────────────────────────────────────────────
@@ -390,8 +393,9 @@ def export_design(
     try:
         orion = SyncOrionClient(auth.tenant_id)
         entity = orion.get_entity(design_id)
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except Exception:
+        logger.exception("Failed to export design %s", design_id)
+        raise HTTPException(status_code=404, detail="Design not found")
 
     geom = (entity.get("location", {}) or {}).get("value", {})
     if not geom:

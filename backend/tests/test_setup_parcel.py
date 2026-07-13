@@ -29,6 +29,21 @@ async def test_wrong_secret_returns_401():
 
 
 @pytest.mark.asyncio
+async def test_empty_configured_secret_fails_closed():
+    """A blank configured internal secret rejects all callers (fail-closed)."""
+    from app.api.setup import setup_parcel, SetupParcelRequest
+
+    body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
+    req = type("R", (), {"headers": {"X-Internal-Service-Secret": ""}, "client": None})()
+
+    with patch("app.api.setup.get_settings", _mock_settings("")):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as exc:
+            await setup_parcel(req, body)
+        assert exc.value.status_code == 401
+
+
+@pytest.mark.asyncio
 async def test_activate_only_ensures_subscription():
     """Activate ensures the DeviceMeasurement subscription and returns 201; creates NO entities."""
     from app.api.setup import setup_parcel, SetupParcelRequest
