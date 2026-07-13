@@ -46,6 +46,16 @@ spec:
                 secretKeyRef:
                   name: jwt-secret
                   key: secret
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: access-key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: secret-key
           resources:
             requests:
               memory: "1Gi"

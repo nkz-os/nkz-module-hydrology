@@ -36,7 +36,9 @@ INSERT INTO marketplace_modules (
         "backend_only": false,
         "navigationItems": [
             { "path": "/hydrology", "label": "Water Studio", "icon": "droplets" }
-        ]
+        ],
+        "api_prefix": "/api/v1/hydrology",
+        "backend_service": "http://hydrology-api-service:8000"
     }'::jsonb
 ) ON CONFLICT (id) DO UPDATE SET
     display_name      = EXCLUDED.display_name,
