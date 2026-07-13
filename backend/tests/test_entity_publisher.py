@@ -108,6 +108,46 @@ def test_zones_empty_input_returns_empty_list():
     assert build_hydrology_zones(TENANT, PARCEL, OBSERVED, zones=[]) == []
 
 
+def test_zone_valid_geometry_includes_location():
+    zones = build_hydrology_zones(
+        tenant_id=TENANT, parcel_id=PARCEL, observed_at=OBSERVED,
+        zones=[{"zone_id": "twi-mid", "geometry": POLY, "twiMean": 8.0,
+                "twiRange": "[6,10]", "areaHa": 3.0, "pixelCount": 300}],
+    )
+    z = zones[0]
+    assert z["location"] == {"type": "GeoProperty", "value": POLY}
+
+
+def test_zone_empty_geometry_omits_location():
+    """An empty geometry dict must NOT emit an invalid empty GeoProperty."""
+    zones = build_hydrology_zones(
+        tenant_id=TENANT, parcel_id=PARCEL, observed_at=OBSERVED,
+        zones=[{"zone_id": "twi-mid", "geometry": {}, "twiMean": 8.0,
+                "twiRange": "[6,10]", "areaHa": 3.0, "pixelCount": 300}],
+    )
+    assert "location" not in zones[0]
+
+
+def test_zone_missing_geometry_omits_location():
+    """A zone with no geometry key at all omits location."""
+    zones = build_hydrology_zones(
+        tenant_id=TENANT, parcel_id=PARCEL, observed_at=OBSERVED,
+        zones=[{"zone_id": "twi-mid", "twiMean": 8.0,
+                "twiRange": "[6,10]", "areaHa": 3.0, "pixelCount": 300}],
+    )
+    assert "location" not in zones[0]
+
+
+def test_zone_typeless_geometry_omits_location():
+    """A geometry dict lacking a 'type' key is not a valid GeoJSON geometry."""
+    zones = build_hydrology_zones(
+        tenant_id=TENANT, parcel_id=PARCEL, observed_at=OBSERVED,
+        zones=[{"zone_id": "twi-mid", "geometry": {"coordinates": [[0, 0]]},
+                "twiMean": 8.0, "twiRange": "[6,10]", "areaHa": 3.0, "pixelCount": 300}],
+    )
+    assert "location" not in zones[0]
+
+
 def test_zone_attrs_are_flat_scalars():
     zones = build_hydrology_zones(
         tenant_id=TENANT, parcel_id=PARCEL, observed_at=OBSERVED,

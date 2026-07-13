@@ -146,10 +146,14 @@ def build_hydrology_zones(
             "id": f"urn:ngsi-ld:AgriParcelZone:{tenant_id}:{parcel_short}:{zone_id}",
             "type": "AgriParcelZone",
             "hasAgriParcel": {"type": "Relationship", "object": parcel_id},
-            "location": {"type": "GeoProperty", "value": z.get("geometry", {})},
             "dateObserved": {"type": "Property", "value": {"@type": "DateTime", "@value": observed_at}},
             "nkz:zoneId": {"type": "Property", "value": zone_id},
         }
+        # Only emit location for a valid GeoJSON geometry. _compute_zones may
+        # yield geometry={} → an empty GeoProperty is rejected by Orion.
+        geometry = z.get("geometry")
+        if isinstance(geometry, dict) and geometry.get("type"):
+            entity["location"] = {"type": "GeoProperty", "value": geometry}
         for key, attr in (
             ("twiMean", "nkz:twiMean"),
             ("twiRange", "nkz:twiRange"),
