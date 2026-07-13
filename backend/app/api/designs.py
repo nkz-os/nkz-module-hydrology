@@ -12,6 +12,7 @@ from typing import Any
 
 import httpx
 import rasterio
+from pyproj import Transformer
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from nkz_platform_sdk import SyncOrionClient, AuthContext, inject_fiware_headers
@@ -86,8 +87,8 @@ def generate_keyline(
     if not dem or not accum:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
-    dem_arr, transform = _read_dem(dem)
-    accum_arr, _ = _read_dem(accum)
+    dem_arr, transform, crs = _read_dem(dem)
+    accum_arr, _, _ = _read_dem(accum)
 
     kl_res = detect_keyline(dem_arr, transform, accum_arr)
     if not kl_res:
@@ -98,6 +99,12 @@ def generate_keyline(
     parallels = generate_keyline_parallels(
         dem, keyline["coordinates"], req.spacing, req.lines, req.grade
     )
+
+    # Reproject all geometry UTM -> WGS84 (parallels computed in UTM first).
+    keypoint["coordinates"] = _to_wgs84(keypoint["coordinates"], crs)
+    keyline["coordinates"] = _to_wgs84(keyline["coordinates"], crs)
+    for p in parallels["parallels"]:
+        p["geometry"]["coordinates"] = _to_wgs84(p["geometry"]["coordinates"], crs)
 
     return {
         "keypoint": keypoint,
@@ -118,7 +125,7 @@ def score_pond(
     if not dem:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
-    dem_arr, transform = _read_dem(dem)
+    dem_arr, transform, _ = _read_dem(dem)
     # Sample elevation at the center point to estimate catchment
     col, row = ~transform * (req.center[0], req.center[1])
     col, row = int(col), int(row)
@@ -158,8 +165,8 @@ def suggest_swales(
     if not dem or not accum:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
-    dem_arr, transform = _read_dem(dem)
-    accum_arr, _ = _read_dem(accum)
+    dem_arr, transform, crs = _read_dem(dem)
+    accum_arr, _, _ = _read_dem(accum)
 
     # Find keypoint to determine keyline elevation
     kl_res = detect_keyline(dem_arr, transform, accum_arr)
@@ -182,6 +189,10 @@ def suggest_swales(
         sc = swale_capacity(req.bank_height, req.trench_width, length_m)
         capacities.append(sc)
 
+    # Reproject UTM -> WGS84 after metric lengths/capacities are computed.
+    for line in lines:
+        line["coordinates"] = _to_wgs84(line["coordinates"], crs)
+
     return {
         "lines": lines,
         "spacing_m": req.bank_height / max(0.01, (dem_arr.max() - keypoint_z) / 100) if len(lines) > 1 else 50,
@@ -203,20 +214,19 @@ def suggest_check_dams(
         # Try S3 key for GeoJSON (not a TIFF)
         from app.services.s3 import get_s3_client
         from app.services.tile_service import stream_network_key
-        import botocore.exceptions as boto_err
         s3 = get_s3_client()
         settings = get_settings()
         key = stream_network_key(req.parcel_id, auth.tenant_id)
         try:
             streams_geojson = s3.get_object(Bucket=settings.minio_bucket, Key=key)["Body"].read()
-        except (boto_err.ClientError, Exception):
+        except Exception:
             return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
     dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
     if not dem:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
-    dem_arr, transform = _read_dem(dem)
+    dem_arr, transform, crs = _read_dem(dem)
     streams = json.loads(streams_geojson)
     dams = []
 
@@ -227,8 +237,9 @@ def suggest_check_dams(
         coords = geom.get("coordinates", [])
         if len(coords) < 5:
             continue
-        # Sample elevation along the stream
-        xs, zs = [], []
+        # Sample elevation along the stream, keeping the sampled (x, y) points
+        # aligned with the cumulative distances xs.
+        xs, zs, sampled = [], [], []
         for i, (x, y) in enumerate(coords):
             col, row = ~transform * (x, y)
             col, row = int(col), int(row)
@@ -239,6 +250,7 @@ def suggest_check_dams(
                 else:
                     xs.append(0.0)
                 zs.append(float(dem_arr[row, col]))
+                sampled.append((x, y))
 
         if len(xs) < 5:
             continue
@@ -246,9 +258,12 @@ def suggest_check_dams(
         zs_arr = np.array(zs)
         inflections = find_slope_inflections(xs_arr, zs_arr)
         for pt in inflections:
+            # Map the inflection distance back to the nearest sampled point.
+            idx = int(np.argmin(np.abs(xs_arr - pt["x"])))
+            sx, sy = sampled[idx]
             dams.append({
                 "type": "Point",
-                "coordinates": [coords[0][0], coords[0][1]],  # simplified
+                "coordinates": _to_wgs84([sx, sy], crs),
                 "channel_slope_pct": round(pt["slope_after"], 1),
                 "spacing_to_next_m": round(check_dam_spacing(pt["slope_after"], req.height), 1),
                 "sediment_retention_t": round(check_dam_sediment_retention(req.height, req.width)),
@@ -264,7 +279,26 @@ def suggest_check_dams(
 def _read_dem(dem_bytes: bytes) -> tuple:
     with io.BytesIO(dem_bytes) as f:
         with rasterio.open(f) as ds:
-            return ds.read(1), ds.transform
+            return ds.read(1), ds.transform, ds.crs
+
+
+def _to_wgs84(coords, src_crs):
+    """Reproject UTM coordinate(s) to WGS84 lon/lat (EPSG:4326).
+
+    Accepts a single ``[x, y]``/``[x, y, z]`` coordinate or a list of them.
+    Output order is (lon, lat, ...) and any trailing z is preserved. Design
+    geometry is computed on ETRS89/UTM rasters; every consumer (Cesium
+    fromDegreesArray, GPX/KML export, GIS-routing ingest) expects WGS84.
+    """
+    transformer = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+
+    def _one(c):
+        lon, lat = transformer.transform(c[0], c[1])
+        return [lon, lat, *c[2:]]
+
+    if coords and isinstance(coords[0], (list, tuple)):
+        return [_one(c) for c in coords]
+    return _one(coords)
 
 
 # ── CRUD endpoints ────────────────────────────────────────────────────
