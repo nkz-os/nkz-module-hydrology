@@ -125,9 +125,11 @@ def score_pond(
     if not dem:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
-    dem_arr, transform, _ = _read_dem(dem)
-    # Sample elevation at the center point to estimate catchment
-    col, row = ~transform * (req.center[0], req.center[1])
+    dem_arr, transform, crs = _read_dem(dem)
+    # The frontend sends center as WGS84 [lon, lat]; reproject to the raster
+    # CRS before inverse-transforming to row/col, or every pick is out of bounds.
+    x, y = _from_wgs84([req.center[0], req.center[1]], crs)
+    col, row = ~transform * (x, y)
     col, row = int(col), int(row)
     ny, nx = dem_arr.shape
     if not (0 <= col < nx and 0 <= row < ny):
@@ -299,6 +301,18 @@ def _to_wgs84(coords, src_crs):
     if coords and isinstance(coords[0], (list, tuple)):
         return [_one(c) for c in coords]
     return _one(coords)
+
+
+def _from_wgs84(coord, dst_crs):
+    """Reproject a WGS84 lon/lat ``[lon, lat, ...]`` to the raster CRS.
+
+    Inverse of :func:`_to_wgs84`. Client-supplied coordinates (pond center)
+    arrive as EPSG:4326 lon/lat and must be projected to the DEM's UTM CRS
+    before the raster inverse-affine (``~transform``). Returns ``(x, y)``.
+    """
+    transformer = Transformer.from_crs("EPSG:4326", dst_crs, always_xy=True)
+    x, y = transformer.transform(coord[0], coord[1])
+    return x, y
 
 
 # ── CRUD endpoints ────────────────────────────────────────────────────

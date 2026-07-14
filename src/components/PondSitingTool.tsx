@@ -22,6 +22,7 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
 
   const pickOnMap = () => {
     if (!cesiumViewer) return;
+    drawingRef.current?.cancel();
     const dm = new DrawingManager(cesiumViewer);
     drawingRef.current = dm;
     dm.start('Point', {

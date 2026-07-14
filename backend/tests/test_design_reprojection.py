@@ -65,6 +65,32 @@ class TestToWgs84Helper:
             assert _in_spain(lon, lat), f"({lon},{lat}) not in Spain bbox"
 
 
+# ── Pond scoring reprojects the client center (WGS84 -> raster CRS) ─────
+
+class TestScorePondReprojectsCenter:
+    def test_wgs84_center_inside_raster_scores_ok(self):
+        """Frontend sends center as WGS84 [lon, lat]; score_pond must
+        reproject it to the raster CRS before the ~transform math, or every
+        real pick falls out of bounds."""
+        from pyproj import Transformer
+
+        from app.api import designs
+
+        # A point well inside the 40x40 EPSG:25830 raster, in WGS84.
+        fwd = Transformer.from_crs(UTM_CRS, "EPSG:4326", always_xy=True)
+        lon, lat = fwd.transform(500100.0, 4749900.0)
+
+        def _dem_only(parcel_id, tenant_id, raster_name):
+            return _synthetic_utm_dem() if raster_name == "breached.tif" else None
+
+        with patch.object(designs, "download_raster", side_effect=_dem_only):
+            res = designs.score_pond(
+                req=designs.PondScoreRequest(parcel_id="p1", center=[lon, lat]),
+                auth=SimpleNamespace(tenant_id="t1", user_id="u1"),
+            )
+        assert res["status"] == "ok", f"expected ok, got {res}"
+
+
 # ── Check-dam placement at inflections ─────────────────────────────────
 
 def _stream_crossing_valley() -> bytes:
