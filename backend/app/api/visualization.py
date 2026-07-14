@@ -27,9 +27,7 @@ async def get_twi_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
     url = get_pmtiles_url(parcel_id, ctx.tenant_id, "twi")
     if url:
         return {"pmtiles_url": url}
-    settings = get_settings()
-    placeholder = f"{settings.minio_public_url}/{settings.minio_bucket}/pmtiles/{parcel_id}/twi.pmtiles"
-    return {"pmtiles_url": placeholder, "status": "not_generated"}
+    return {"pmtiles_url": None, "status": "not_generated"}
 
 
 @router.get("/{parcel_id}/tiles/risk")
@@ -40,9 +38,7 @@ async def get_risk_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
     url = get_pmtiles_url(parcel_id, ctx.tenant_id, "risk")
     if url:
         return {"pmtiles_url": url}
-    settings = get_settings()
-    placeholder = f"{settings.minio_public_url}/{settings.minio_bucket}/pmtiles/{parcel_id}/risk.pmtiles"
-    return {"pmtiles_url": placeholder, "status": "not_generated"}
+    return {"pmtiles_url": None, "status": "not_generated"}
 
 
 @router.get("/{parcel_id}/flows")

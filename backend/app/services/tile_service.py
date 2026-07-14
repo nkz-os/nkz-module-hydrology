@@ -64,7 +64,8 @@ def generate_pmtiles(
         colormap: Matplotlib colormap name applied during conversion.
 
     Returns:
-        Public URL of the uploaded PMTiles file.
+        MinIO object key of the uploaded PMTiles file (worker/log use only — the
+        bucket is private, so this is a key, not a fetchable URL).
 
     Raises:
         RuntimeError: If the geolibre tool fails or produces no output.
@@ -86,13 +87,11 @@ def generate_pmtiles(
         ContentType="application/vnd.pmtiles",
     )
 
-    settings = get_settings()
-    public_url = f"{settings.minio_public_url}/{settings.minio_bucket}/{key}"
     logger.info(
         "PMTiles %s for parcel %s: %s (%d bytes)",
-        raster_name, parcel_id, public_url, len(pmtiles),
+        raster_name, parcel_id, key, len(pmtiles),
     )
-    return public_url
+    return key
 
 
 def generate_twi_pmtiles(
@@ -169,21 +168,32 @@ def twi_pmtiles_key(parcel_id: str, tenant_id: str) -> str:
     return _pmtiles_key(parcel_id, tenant_id, "twi")
 
 
-def get_public_url(key: str) -> str:
-    """Build the public MinIO URL for a given object key."""
+def _presign_get(key: str) -> str:
+    """Presigned S3v4 GET URL for an object key, signed against the public host."""
+    from app.services.s3 import get_presign_client
     settings = get_settings()
-    return f"{settings.minio_public_url}/{settings.minio_bucket}/{key}"
+    return get_presign_client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.minio_bucket, "Key": key},
+        ExpiresIn=settings.presign_expiry_seconds,
+    )
+
+
+def get_public_url(key: str) -> str:
+    """Presigned GET URL for an object key.
+
+    The tenant bucket is private (no anonymous policy), so a naked
+    ``{public}/{bucket}/{key}`` URL 403s. Returns a short-lived S3v4-presigned URL
+    signed against the public MinIO host so a browser can fetch it directly.
+    """
+    return _presign_get(key)
 
 
 def get_pmtiles_url(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> Optional[str]:
-    """Get the public URL for an existing PMTiles file.
+    """Get a presigned GET URL for an existing PMTiles file.
 
     Returns ``None`` if the file does not exist in MinIO.
     """
     if not pmtiles_exists(parcel_id, tenant_id, raster_name):
         return None
-    settings = get_settings()
-    return (
-        f"{settings.minio_public_url}/{settings.minio_bucket}/"
-        f"{_pmtiles_key(parcel_id, tenant_id, raster_name)}"
-    )
+    return _presign_get(_pmtiles_key(parcel_id, tenant_id, raster_name))

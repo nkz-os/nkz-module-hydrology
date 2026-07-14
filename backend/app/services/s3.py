@@ -21,3 +21,22 @@ def get_s3_client():
         region_name=settings.minio_region,
         config=BotoConfig(signature_version="s3v4"),
     )
+
+
+def get_presign_client():
+    """boto3 S3 client for generating presigned URLs against the PUBLIC endpoint.
+
+    Presigned URLs embed the host in the signature, so a URL signed against the
+    internal endpoint (``minio-service:9000``) would fail at ``minio.robotika.cloud``.
+    Sign against ``minio_public_url`` so browsers can fetch tenant PMTiles directly.
+    Same creds/region/s3v4 as ``get_s3_client``.
+    """
+    settings = get_settings()
+    return boto3.client(
+        "s3",
+        endpoint_url=settings.minio_public_url,
+        aws_access_key_id=settings.minio_access_key,
+        aws_secret_access_key=settings.minio_secret_key,
+        region_name=settings.minio_region,
+        config=BotoConfig(signature_version="s3v4"),
+    )

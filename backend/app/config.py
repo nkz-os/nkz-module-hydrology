@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     minio_bucket: str = "nkz-hydrology"
     minio_public_url: str = "https://minio.robotika.cloud"
     minio_region: str = "us-east-1"
+    presign_expiry_seconds: int = 3600
 
 
 
