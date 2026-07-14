@@ -48,7 +48,7 @@ export default defineModule({
   // reads/writes. The gateway will block requests for anything else.
   // Use ['*'] as wildcard to opt out (not recommended for production).
   data: {
-    entities: ['AgriParcelRecord', 'AgriParcelZone', 'nkz:HydrologyDesign'],
+    entities: ['AgriParcelRecord', 'AgriParcelZone', 'nkz:WaterStorage', 'nkz:OpenChannelFlow'],
     timeseries: ['AgriParcelRecord'],
   },
 });

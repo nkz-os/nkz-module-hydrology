@@ -1,8 +1,10 @@
 """Anti-regression: the module must NEVER publish invented NGSI-LD entity types.
 
 Allowed SDM types for writes: AgriParcelRecord, AgriParcelZone.
-Invented legacy types that were removed in Ronda 2.2 (must stay gone):
-  nkz:OpenChannelFlow, TWI_H3, WaterBalanceAssessment, nkz:WaterStorage, OpenChannelFlow.
+Design entities use the spec §6.1 NKZ own types nkz:WaterStorage /
+nkz:OpenChannelFlow (frozen, hosted @context) — those are sanctioned.
+Invented legacy types that were removed (must stay gone):
+  nkz:HydrologyDesign, TWI_H3, WaterBalanceAssessment, WaterBalanceObservation.
 """
 import re
 from pathlib import Path
@@ -10,12 +12,10 @@ from pathlib import Path
 APP_DIR = Path(__file__).resolve().parents[1] / "app"
 
 FORBIDDEN_TYPES = {
-    "OpenChannelFlow",
-    "nkz:OpenChannelFlow",
+    "HydrologyDesign",
+    "nkz:HydrologyDesign",
     "TWI_H3",
     "WaterBalanceAssessment",
-    "WaterStorage",
-    "nkz:WaterStorage",
     "WaterBalanceObservation",
 }
 

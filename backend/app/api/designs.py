@@ -315,6 +315,20 @@ def _from_wgs84(coord, dst_crs):
     return x, y
 
 
+# ── Entity-type mapping (spec §6.1) ────────────────────────────────────
+# design_type → (NGSI-LD type, bare type for the URN).
+#   pond                       → nkz:WaterStorage   (Polygon storage structure)
+#   keyline / swale / check_dam → nkz:OpenChannelFlow (open channel flow line)
+
+_WATER_STORAGE = ("nkz:WaterStorage", "WaterStorage")
+_OPEN_CHANNEL_FLOW = ("nkz:OpenChannelFlow", "OpenChannelFlow")
+
+
+def _entity_type_for(design_type: str) -> tuple[str, str]:
+    """Map a design_type to its spec-frozen (ngsi_type, bare_type)."""
+    return _WATER_STORAGE if design_type == "pond" else _OPEN_CHANNEL_FLOW
+
+
 # ── CRUD endpoints ────────────────────────────────────────────────────
 
 @router.get("")
@@ -322,11 +336,15 @@ def list_designs(
     parcel_id: str = Query(...),
     auth: AuthContext = require_auth(),
 ) -> list[dict]:
-    """List all HydrologyDesign entities for a parcel."""
+    """List all hydrology design entities for a parcel.
+
+    Both spec types are fetched in a single call via the NGSI-LD
+    typeSelection list — comma IS valid in the ``type`` param (unlike ``q``).
+    """
     try:
         orion = SyncOrionClient(auth.tenant_id)
         entities = orion.query_entities(
-            type="nkz:HydrologyDesign",
+            type="nkz:WaterStorage,nkz:OpenChannelFlow",
             q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
         )
         return entities
@@ -340,16 +358,23 @@ def create_design(
     req: DesignSaveRequest,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Create a new HydrologyDesign entity in Orion-LD."""
+    """Create a hydrology design entity in Orion-LD (spec §6.1-6.3).
+
+    Maps design_type → nkz:WaterStorage (pond) / nkz:OpenChannelFlow
+    (keyline/swale/check_dam) and stamps the typed attributes from
+    ``req.parameters`` when present.
+    """
     design_id = str(uuid.uuid4())
     tenant_id = auth.tenant_id
+    ngsi_type, bare_type = _entity_type_for(req.design_type)
+    parcel_short = req.parcel_id.rsplit(":", 1)[-1]
     entity = {
         "@context": [
             "https://uri.etsi.org/ngsi-ld/v1/ngsi-ld-core-context.jsonld",
             "https://nekazari.robotika.cloud/ngsi-ld-context.json",
         ],
-        "id": f"urn:ngsi-ld:nkz:HydrologyDesign:{tenant_id}:{req.parcel_id}:{design_id}",
-        "type": "nkz:HydrologyDesign",
+        "id": f"urn:ngsi-ld:{bare_type}:{tenant_id}:{parcel_short}:{design_id}",
+        "type": ngsi_type,
         "hasAgriParcel": {"type": "Relationship", "object": req.parcel_id},
         "location": {"type": "GeoProperty", "value": req.geometry},
         "nkz:designType": {"type": "Property", "value": req.design_type},
@@ -357,6 +382,21 @@ def create_design(
         "nkz:version": {"type": "Property", "value": 1},
         "nkz:label": {"type": "Property", "value": req.label},
     }
+
+    params = req.parameters or {}
+    if ngsi_type == _WATER_STORAGE[0]:
+        if "capacity" in params:
+            entity["nkz:capacity"] = {
+                "type": "Property", "value": params["capacity"], "unitCode": "MTQ",
+            }
+        for attr in ("pondScore", "isViable", "requiresLining"):
+            if attr in params:
+                entity[f"nkz:{attr}"] = {"type": "Property", "value": params[attr]}
+    else:  # nkz:OpenChannelFlow
+        if "grade" in params:
+            # Spec §6.2: designGrade is a percentage; parameters.grade is a ratio.
+            entity["nkz:designGrade"] = {"type": "Property", "value": params["grade"] * 100}
+
     try:
         orion = SyncOrionClient(tenant_id)
         orion.create_entity(entity)
@@ -371,7 +411,7 @@ def get_design(
     design_id: str,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Get a single HydrologyDesign entity."""
+    """Get a single hydrology design entity (id-based, type-agnostic)."""
     try:
         orion = SyncOrionClient(auth.tenant_id)
         return orion.get_entity(design_id)
@@ -386,7 +426,7 @@ def update_design(
     req: DesignSaveRequest,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Update a HydrologyDesign entity (increments version).
+    """Update a hydrology design entity (increments version).
 
     Uses PATCH /ngsi-ld/v1/entities/{id}/attrs via httpx since
     SyncOrionClient lacks append_entity_attrs (async-only method).
@@ -419,7 +459,7 @@ def delete_design(
     design_id: str,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Delete a HydrologyDesign entity."""
+    """Delete a hydrology design entity (id-based, type-agnostic)."""
     try:
         orion = SyncOrionClient(auth.tenant_id)
         orion.delete_entity(design_id)

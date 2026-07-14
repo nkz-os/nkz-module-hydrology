@@ -23,6 +23,73 @@ def test_list_designs_query_uses_or_pipe():
     assert "|" in q and "," not in q
 
 
+def test_list_designs_queries_both_spec_types():
+    """list_designs must query BOTH nkz:WaterStorage and nkz:OpenChannelFlow
+    in one call via the comma-separated NGSI-LD typeSelection list (§6.1)."""
+    from app.api import designs
+
+    pid = "urn:ngsi-ld:AgriParcel:p1"
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.query_entities.return_value = []
+        designs.list_designs(parcel_id=pid, auth=SimpleNamespace(tenant_id="t1"))
+
+    _, kwargs = MockOrion.return_value.query_entities.call_args
+    assert kwargs["type"] == "nkz:WaterStorage,nkz:OpenChannelFlow"
+
+
+def test_create_pond_uses_waterstorage_type_and_urn():
+    """design_type 'pond' → nkz:WaterStorage with bare-type URN and MTQ capacity."""
+    from app.api import designs
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        designs.create_design(
+            req=designs.DesignSaveRequest(
+                parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                design_type="pond",
+                geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+                parameters={
+                    "capacity": 1500.0,
+                    "pondScore": 0.82,
+                    "isViable": True,
+                    "requiresLining": False,
+                },
+            ),
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    (entity,), _ = MockOrion.return_value.create_entity.call_args
+    assert entity["type"] == "nkz:WaterStorage"
+    assert entity["id"].startswith("urn:ngsi-ld:WaterStorage:t1:p1:")
+    # No nested full parcel URN in the id (audit fix).
+    assert "AgriParcel" not in entity["id"]
+    assert entity["nkz:capacity"]["value"] == 1500.0
+    assert entity["nkz:capacity"]["unitCode"] == "MTQ"
+    assert entity["nkz:pondScore"]["value"] == 0.82
+    assert entity["nkz:isViable"]["value"] is True
+    assert entity["nkz:requiresLining"]["value"] is False
+
+
+def test_create_keyline_uses_openchannelflow_type_and_grade():
+    """design_type 'keyline' → nkz:OpenChannelFlow with nkz:designGrade (%)."""
+    from app.api import designs
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        designs.create_design(
+            req=designs.DesignSaveRequest(
+                parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                design_type="keyline",
+                geometry={"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                parameters={"grade": 0.005},
+            ),
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    (entity,), _ = MockOrion.return_value.create_entity.call_args
+    assert entity["type"] == "nkz:OpenChannelFlow"
+    assert entity["id"].startswith("urn:ngsi-ld:OpenChannelFlow:t1:p1:")
+    assert entity["nkz:designGrade"]["value"] == 0.5
+
+
 def test_list_designs_requires_auth():
     """Without auth headers, list_designs returns 401."""
     from app.api.designs import router
