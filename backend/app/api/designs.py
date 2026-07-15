@@ -329,6 +329,30 @@ def _entity_type_for(design_type: str) -> tuple[str, str]:
     return _WATER_STORAGE if design_type == "pond" else _OPEN_CHANNEL_FLOW
 
 
+def _derived_attrs(design_type: str, parameters: dict | None) -> dict:
+    """Typed NGSI-LD attributes derived from ``parameters`` (spec §6.2).
+
+    Single source of truth for both create and update — each attribute is
+    emitted only when its source parameter is present.
+    """
+    params = parameters or {}
+    attrs: dict[str, dict] = {}
+    ngsi_type, _ = _entity_type_for(design_type)
+    if ngsi_type == _WATER_STORAGE[0]:
+        if "capacity" in params:
+            attrs["nkz:capacity"] = {
+                "type": "Property", "value": params["capacity"], "unitCode": "MTQ",
+            }
+        for attr in ("pondScore", "isViable", "requiresLining"):
+            if attr in params:
+                attrs[f"nkz:{attr}"] = {"type": "Property", "value": params[attr]}
+    else:  # nkz:OpenChannelFlow
+        if "grade" in params:
+            # Spec §6.2: designGrade is a percentage; parameters.grade is a ratio.
+            attrs["nkz:designGrade"] = {"type": "Property", "value": params["grade"] * 100}
+    return attrs
+
+
 # ── CRUD endpoints ────────────────────────────────────────────────────
 
 @router.get("")
@@ -383,19 +407,7 @@ def create_design(
         "nkz:label": {"type": "Property", "value": req.label},
     }
 
-    params = req.parameters or {}
-    if ngsi_type == _WATER_STORAGE[0]:
-        if "capacity" in params:
-            entity["nkz:capacity"] = {
-                "type": "Property", "value": params["capacity"], "unitCode": "MTQ",
-            }
-        for attr in ("pondScore", "isViable", "requiresLining"):
-            if attr in params:
-                entity[f"nkz:{attr}"] = {"type": "Property", "value": params[attr]}
-    else:  # nkz:OpenChannelFlow
-        if "grade" in params:
-            # Spec §6.2: designGrade is a percentage; parameters.grade is a ratio.
-            entity["nkz:designGrade"] = {"type": "Property", "value": params["grade"] * 100}
+    entity.update(_derived_attrs(req.design_type, req.parameters))
 
     try:
         orion = SyncOrionClient(tenant_id)
@@ -442,10 +454,14 @@ def update_design(
             "nkz:version": {"type": "Property", "value": version},
             "nkz:label": {"type": "Property", "value": req.label},
         }
+        # Re-derive typed attrs (nkz:designGrade / nkz:capacity, ...) so they
+        # never drift from nkz:parameters after an update (spec §6.2).
+        attrs.update(_derived_attrs(req.design_type, req.parameters))
         settings = get_settings()
         orion_url = settings.orion_ld_url.rstrip("/")
         url = f"{orion_url}/ngsi-ld/v1/entities/{design_id}/attrs"
-        headers = inject_fiware_headers(auth.tenant_id, content_type="application/json")
+        # Attribute fragment carries no @context → application/json + Link.
+        headers = inject_fiware_headers({}, auth.tenant_id, has_context_in_body=False)
         resp = httpx.patch(url, json=attrs, headers=headers, timeout=10)
         resp.raise_for_status()
         return {"id": design_id, "version": version, "status": "updated"}

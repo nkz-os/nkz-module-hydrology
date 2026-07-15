@@ -90,6 +90,59 @@ def test_create_keyline_uses_openchannelflow_type_and_grade():
     assert entity["nkz:designGrade"]["value"] == 0.5
 
 
+def test_update_keyline_refreshes_design_grade():
+    """PUT with a changed grade must PATCH nkz:designGrade with the new % value."""
+    from app.api import designs
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion, \
+         patch.object(designs, "httpx") as mock_httpx:
+        MockOrion.return_value.get_entity.return_value = {
+            "nkz:version": {"value": 3},
+        }
+        designs.update_design(
+            design_id="urn:ngsi-ld:OpenChannelFlow:t1:p1:d1",
+            req=designs.DesignSaveRequest(
+                parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                design_type="keyline",
+                geometry={"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                parameters={"grade": 0.008},
+            ),
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    _, kwargs = mock_httpx.patch.call_args
+    attrs = kwargs["json"]
+    assert attrs["nkz:designGrade"]["value"] == 0.8
+    assert attrs["nkz:version"]["value"] == 4
+
+
+def test_update_pond_refreshes_typed_attrs_with_unitcode():
+    """Pond PUT with capacity must PATCH nkz:capacity carrying MTQ unitCode."""
+    from app.api import designs
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion, \
+         patch.object(designs, "httpx") as mock_httpx:
+        MockOrion.return_value.get_entity.return_value = {
+            "nkz:version": {"value": 1},
+        }
+        designs.update_design(
+            design_id="urn:ngsi-ld:WaterStorage:t1:p1:d1",
+            req=designs.DesignSaveRequest(
+                parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                design_type="pond",
+                geometry={"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 0]]]},
+                parameters={"capacity": 2000.0, "isViable": False},
+            ),
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    _, kwargs = mock_httpx.patch.call_args
+    attrs = kwargs["json"]
+    assert attrs["nkz:capacity"]["value"] == 2000.0
+    assert attrs["nkz:capacity"]["unitCode"] == "MTQ"
+    assert attrs["nkz:isViable"]["value"] is False
+
+
 def test_list_designs_requires_auth():
     """Without auth headers, list_designs returns 401."""
     from app.api.designs import router
