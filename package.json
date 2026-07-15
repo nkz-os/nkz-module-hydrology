@@ -2,7 +2,7 @@
   "name": "hydrology-module",
   "version": "1.0.0",
   "description": "NKZ Water Studio — Nekazari Platform Module",
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "packageManager": "pnpm@9.0.0",
   "type": "module",
   "main": "./src/Module.tsx",
