@@ -464,7 +464,15 @@ def update_design(
         orion_url = settings.orion_ld_url.rstrip("/")
         url = f"{orion_url}/ngsi-ld/v1/entities/{design_id}/attrs"
         # Attribute fragment carries no @context → application/json + Link.
+        # inject_fiware_headers only adds Link when the CONTEXT_URL env var is
+        # set; hydrology prod does not set it, so guarantee the platform-context
+        # Link ourselves or Orion silently drops every nkz:* attr (spec §6.2).
         headers = inject_fiware_headers({}, auth.tenant_id, has_context_in_body=False)
+        headers.setdefault(
+            "Link",
+            f'<{settings.context_url}>; rel="http://www.w3.org/ns/json-ld#context";'
+            ' type="application/ld+json"',
+        )
         resp = httpx.patch(url, json=attrs, headers=headers, timeout=10)
         resp.raise_for_status()
         return {"id": design_id, "version": version, "status": "updated"}

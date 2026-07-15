@@ -116,6 +116,38 @@ def test_update_keyline_refreshes_design_grade():
     assert attrs["nkz:version"]["value"] == 4
 
 
+def test_update_sends_context_link_header_without_env(monkeypatch):
+    """PUT PATCH must carry a Link @context header even when CONTEXT_URL is unset.
+
+    Regression: inject_fiware_headers only adds Link when the CONTEXT_URL env var
+    is set. Hydrology prod does not set it, so nkz:* attrs would silently drop.
+    """
+    from app.api import designs
+
+    monkeypatch.delenv("CONTEXT_URL", raising=False)
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion, \
+         patch.object(designs, "httpx") as mock_httpx:
+        MockOrion.return_value.get_entity.return_value = {"nkz:version": {"value": 1}}
+        designs.update_design(
+            design_id="urn:ngsi-ld:OpenChannelFlow:t1:p1:d1",
+            req=designs.DesignSaveRequest(
+                parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                design_type="keyline",
+                geometry={"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                parameters={"grade": 0.008},
+            ),
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    _, kwargs = mock_httpx.patch.call_args
+    headers = kwargs["headers"]
+    assert headers["Content-Type"] == "application/json"
+    assert "Link" in headers
+    assert designs.get_settings().context_url in headers["Link"]
+    assert 'rel="http://www.w3.org/ns/json-ld#context"' in headers["Link"]
+
+
 def test_update_pond_refreshes_typed_attrs_with_unitcode():
     """Pond PUT with capacity must PATCH nkz:capacity carrying MTQ unitCode."""
     from app.api import designs
