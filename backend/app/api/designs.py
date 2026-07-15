@@ -292,6 +292,9 @@ def _to_wgs84(coords, src_crs):
     geometry is computed on ETRS89/UTM rasters; every consumer (Cesium
     fromDegreesArray, GPX/KML export, GIS-routing ingest) expects WGS84.
     """
+    if not coords:
+        return coords
+
     transformer = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
 
     def _one(c):

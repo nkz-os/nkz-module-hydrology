@@ -109,7 +109,9 @@ class OrionContextClient:
     def get_soil_context(self, parcel_id: str) -> SoilContext:
         """Query AgriSoil linked to parcel, extract top horizon properties.
 
-        Uses query_entities(type="AgriSoil", q='hasAgriParcel=="<id>"').
+        Uses query_entities(type="AgriSoil",
+        q='(hasAgriParcel=="<id>"|refAgriParcel=="<id>")') — dual-relationship
+        form covering both the new and legacy relationship names.
         Parses the first entity found.
         Returns SoilContext with source='orion' on success, 'default' on miss.
         """

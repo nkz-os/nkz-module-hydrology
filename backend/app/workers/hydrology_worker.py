@@ -45,6 +45,15 @@ _STREAM_AREA_M2 = 10_000.0  # 1 ha physical stream threshold (owner decision)
 _DEG2M_APPROX = 111_320.0   # metres per degree (approximate, for buffer/area)
 
 
+def _slope_deg_to_pct(slope_deg: float) -> float:
+    """Convert a slope in DEGREES (geolibre raster contract) to PERCENT.
+
+    ``ls_from_slope`` expects rise/run percent, while the engine slope raster
+    (and the Kirpich tc block) work in degrees. e.g. 10° → 17.63%.
+    """
+    return math.tan(math.radians(slope_deg)) * 100.0
+
+
 def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     """RQ worker entry point: full DEM pipeline for a parcel.
 
@@ -154,7 +163,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     metrics["soilSaturationPct"] = b_res["saturation_pct"]
 
     # 3. MUSLE
-    ls_fact = ls_from_slope(slope_mean)
+    ls_fact = ls_from_slope(_slope_deg_to_pct(slope_mean))
     c_fact = c_from_ndvi(ndvi_mean)
     runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0
     sediment = musle_sediment(runoff_m3, peak_m3s, soil.k_factor, ls_fact, c_fact)
@@ -219,7 +228,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
             zone["nkz:soilSaturationPct"] = bz["saturation_pct"]
 
             z_slope_len = max(10.0, min(200.0, (z_area_ha * 10000.0) ** 0.5))
-            z_ls = ls_from_slope(z_slope, slope_length_m=z_slope_len)
+            z_ls = ls_from_slope(_slope_deg_to_pct(z_slope), slope_length_m=z_slope_len)
             z_runoff_m3 = (z_run_mm / 1000.0) * z_area_ha * 10000.0
             z_sed = musle_sediment(z_runoff_m3, z_peak_m3s, soil.k_factor, z_ls, c_fact)
             zone["nkz:sedimentYieldTonnes"] = z_sed
@@ -303,7 +312,13 @@ def _read_parcel_polygon(parcel_id: str, tenant_id: str) -> tuple[dict, float]:
     loc = ent.get("location", {}).get("value")
     if not loc:
         raise RuntimeError(f"AgriParcel {parcel_id} has no location")
-    area_ha = shply_shape(loc).area * (_DEG2M_APPROX ** 2) / 10_000.0
+    # Degrees² → m²: the longitude degree shrinks by cos(lat), so the area
+    # of a lat/lon polygon must be scaled by cos(centroid_lat). Without it the
+    # area is overestimated ~37% at lat 43°N (feeds DEM resolution, SCS-CN
+    # peak flow, runoff volume and MUSLE).
+    shp = shply_shape(loc)
+    centroid_lat = shp.centroid.y
+    area_ha = shp.area * (_DEG2M_APPROX ** 2) * math.cos(math.radians(centroid_lat)) / 10_000.0
     return loc, area_ha
 
 
