@@ -101,7 +101,7 @@ const HydrologyContextPanel: React.FC = () => {
         </button>
       </div>
       {analysis === 'done' && <p className="text-xs text-nkz-accent mb-2">{t('hydrology:analysisDone')}</p>}
-      {analysis === 'failed' && <p className="text-xs text-nkz-muted mb-2">{t('hydrology:analysisFailed')}</p>}
+      {analysis === 'failed' && <p className="text-xs text-red-500 mb-2">{t('hydrology:analysisFailed')}</p>}
       <div className="flex gap-1 mb-3 border-b border-nkz-border overflow-x-auto">
         {TABS.map((tab) => (
           <button
@@ -115,7 +115,14 @@ const HydrologyContextPanel: React.FC = () => {
           </button>
         ))}
       </div>
-      {activeTab === 'kpis' && <ZonalKpiTable key={refreshKey} parcelId={parcelId} />}
+      {activeTab === 'kpis' && (
+        <ZonalKpiTable
+          key={refreshKey}
+          parcelId={parcelId}
+          onRunAnalysis={runAnalysis}
+          analysisRunning={analysis === 'running'}
+        />
+      )}
       {activeTab === 'keyline' && <KeylineDesigner parcelId={parcelId} />}
       {activeTab === 'pond' && <PondSitingTool parcelId={parcelId} />}
       {activeTab === 'swale' && <SwaleDesigner parcelId={parcelId} />}

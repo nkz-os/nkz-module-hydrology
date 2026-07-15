@@ -2,9 +2,13 @@ import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, ZoneKpi } from '../services/api';
 
-interface Props { parcelId: string; }
+interface Props {
+  parcelId: string;
+  onRunAnalysis?: () => void;
+  analysisRunning?: boolean;
+}
 
-const ZonalKpiTable: React.FC<Props> = ({ parcelId }) => {
+const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunning }) => {
   const { t } = useTranslation();
   const [zones, setZones] = useState<ZoneKpi[]>([]);
   const [loading, setLoading] = useState(true);
@@ -16,7 +20,20 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId }) => {
   }, [parcelId]);
 
   if (loading) return <p className="text-nkz-muted text-sm">{t('hydrology:loading')}</p>;
-  if (!zones.length) return <p className="text-nkz-muted text-sm">{t('hydrology:noData')}</p>;
+  if (!zones.length) return (
+    <div className="text-sm">
+      <p className="text-nkz-muted mb-2">{t('hydrology:noData')}</p>
+      {onRunAnalysis && (
+        <button
+          className="text-xs bg-nkz-accent text-white px-2 py-1 rounded whitespace-nowrap disabled:opacity-60"
+          onClick={onRunAnalysis}
+          disabled={analysisRunning}
+        >
+          {analysisRunning ? t('hydrology:analysisRunning') : t('hydrology:runAnalysisCta')}
+        </button>
+      )}
+    </div>
+  );
 
   return (
     <table className="w-full text-xs">
