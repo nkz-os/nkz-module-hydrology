@@ -41,6 +41,23 @@ async def get_risk_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
     return {"pmtiles_url": None, "status": "not_generated"}
 
 
+@router.get("/{parcel_id}/overlay/twi")
+async def get_twi_overlay(parcel_id: str, ctx: AuthContext = require_auth()):
+    """Get the TWI ground-overlay PNG (presigned URL) + WGS84 bounds.
+
+    JSON only — never image bytes (the api-gateway 502s non-JSON). The browser
+    fetches the PNG directly from the private MinIO bucket via the presigned URL.
+    """
+    from app.services.overlay import ensure_twi_overlay, overlay_png_key
+    from app.services.tile_service import get_public_url
+
+    bounds = ensure_twi_overlay(parcel_id, ctx.tenant_id)
+    if bounds is None:
+        return {"url": None, "bounds": None, "status": "not_generated"}
+    url = get_public_url(overlay_png_key(parcel_id, ctx.tenant_id))
+    return {"url": url, "bounds": bounds, "status": "ok"}
+
+
 @router.get("/{parcel_id}/flows")
 async def get_flows(parcel_id: str, ctx: AuthContext = require_auth()):
     """Get stream network GeoJSON for a parcel."""

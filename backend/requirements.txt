@@ -22,6 +22,7 @@ rq>=1.16.0
 redis>=5.0.0
 rasterio>=1.3.0
 numpy>=1.24.0
+pillow>=10.0.0  # HPND license (AGPL-compatible); TWI overlay PNG render
 
 # Platform SDK
 nkz-platform-sdk>=0.4.1
