@@ -65,6 +65,20 @@
     "untitledDesign": "Untitled design",
     "showOnMap": "Show on map",
     "confirmDelete": "Delete this design?",
-    "downloadGeoJson": "Download GeoJSON"
+    "downloadGeoJson": "Download GeoJSON",
+    "summaryTitle": "Parcel summary",
+    "peakFlow": "Peak flow (m³/s)",
+    "twiMeanKpi": "TWI mean",
+    "streamLength": "Stream length (m)",
+    "eto": "ET₀ (mm)",
+    "precipitation": "Precipitation (mm)",
+    "temperature": "Temperature (°C)",
+    "soilSource": "Soil",
+    "vegetationSource": "Vegetation",
+    "observedAt": "Observed",
+    "fidelity_ign_5m": "IGN 5m",
+    "fidelity_ign_25m": "IGN 25m",
+    "fidelity_degraded_flat": "Flat (degraded)",
+    "fidelity_unavailable": "Unavailable"
   }
 }

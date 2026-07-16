@@ -65,6 +65,20 @@
     "untitledDesign": "Diseño sin nombre",
     "showOnMap": "Ver en el mapa",
     "confirmDelete": "¿Eliminar este diseño?",
-    "downloadGeoJson": "Descargar GeoJSON"
+    "downloadGeoJson": "Descargar GeoJSON",
+    "summaryTitle": "Resumen de la parcela",
+    "peakFlow": "Caudal punta (m³/s)",
+    "twiMeanKpi": "TWI medio",
+    "streamLength": "Longitud de cauces (m)",
+    "eto": "ET₀ (mm)",
+    "precipitation": "Precipitación (mm)",
+    "temperature": "Temperatura (°C)",
+    "soilSource": "Suelo",
+    "vegetationSource": "Vegetación",
+    "observedAt": "Observado",
+    "fidelity_ign_5m": "IGN 5m",
+    "fidelity_ign_25m": "IGN 25m",
+    "fidelity_degraded_flat": "Plano (degradado)",
+    "fidelity_unavailable": "No disponible"
   }
 }

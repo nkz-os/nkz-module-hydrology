@@ -63,6 +63,36 @@ export interface ZoneKpi {
   keylineGrade?: number;
 }
 
+export type DataFidelity = 'ign_5m' | 'ign_25m' | 'degraded_flat' | 'unavailable' | string;
+
+export interface ParcelSummaryKpis {
+  twiMean?: number;
+  twiMax?: number;
+  slopeMean?: number;
+  streamLengthM?: number;
+  runoffMm?: number;
+  peakFlowM3s?: number;
+  sedimentYieldTonnes?: number;
+  soilSaturationPct?: number;
+  keylineGrade?: number;
+  pondViability?: number;
+  etoMm?: number;
+  precipitationMm?: number;
+  temperatureAvg?: number;
+  temperatureMin?: number;
+  soilMoisture?: number;
+}
+
+export interface ParcelSummary {
+  status?: 'no_data' | string;
+  observedAt?: string | null;
+  dataFidelity?: DataFidelity | null;
+  demSource?: string | null;
+  soilSource?: string | null;
+  vegetationSource?: string | null;
+  kpis?: ParcelSummaryKpis;
+}
+
 export interface KeylineRequest {
   parcel_id: string;
   grade: number;
@@ -161,6 +191,10 @@ export const api = {
 
   // Zones
   getZones: (parcelId: string) => get<ZoneKpi[]>(`/parcels/${encodeURIComponent(parcelId)}/zones`),
+
+  // Parcel summary (latest AgriParcelRecord surfaced as flat KPIs)
+  getSummary: (parcelId: string) =>
+    get<ParcelSummary>(`/parcels/${encodeURIComponent(parcelId)}/summary`),
 
   // Visualization overlays (JSON through the same-origin gateway)
   getTwiOverlay: (parcelId: string) =>
