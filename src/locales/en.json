@@ -56,6 +56,15 @@
     "layerFlows": "Drainage network",
     "layerDesigns": "Designs",
     "opacity": "Opacity",
-    "twiError": "Could not load the TWI overlay"
+    "twiError": "Could not load the TWI overlay",
+    "saved": "Saved",
+    "delete": "Delete",
+    "designLabel": "Design name",
+    "designs": "Designs",
+    "noDesigns": "No saved designs for this parcel",
+    "untitledDesign": "Untitled design",
+    "showOnMap": "Show on map",
+    "confirmDelete": "Delete this design?",
+    "downloadGeoJson": "Download GeoJSON"
   }
 }

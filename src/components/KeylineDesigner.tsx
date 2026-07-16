@@ -15,9 +15,13 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   const [lines, setLines] = useState(7);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [label, setLabel] = useState('');
+  const [savedId, setSavedId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
 
   const generate = async () => {
     setLoading(true);
+    setSavedId(undefined);
     try {
       const res = await api.generateKeyline({
         parcel_id: parcelId, grade: grade / 100, spacing, lines,
@@ -45,6 +49,27 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
     }
   };
 
+  const save = async () => {
+    if (!result?.keyline) return;
+    const coordinates: number[][][] = [result.keyline.coordinates];
+    (result.parallel_lines || []).forEach((p: any) => coordinates.push(p.geometry.coordinates));
+    setSaving(true);
+    try {
+      const { id } = await api.saveDesign({
+        parcel_id: parcelId,
+        design_type: 'keyline',
+        geometry: { type: 'MultiLineString', coordinates },
+        parameters: { grade: grade / 100, spacing, lines },
+        label: label || t('hydrology:keylineDesigner'),
+      });
+      setSavedId(id);
+    } catch (e) {
+      console.error('Keyline save failed:', e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-2">
       <div>
@@ -67,7 +92,24 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
               className="bg-nkz-accent text-white px-3 py-1 rounded text-sm w-full">
         {loading ? t('hydrology:loading') : t('hydrology:keypoint')}
       </button>
-      {result && <ExportMenu designType="keyline" geometry={result.keyline} />}
+      {result?.keyline && (
+        <>
+          <div className="flex gap-1 pt-1">
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('hydrology:designLabel')}
+              className="flex-1 border rounded px-2 py-1 text-sm"
+            />
+            <button onClick={save} disabled={saving}
+                    className="border px-3 py-1 rounded text-sm whitespace-nowrap disabled:opacity-60">
+              {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
+            </button>
+          </div>
+          <ExportMenu designType="keyline" geometry={result.keyline} designId={savedId} />
+        </>
+      )}
     </div>
   );
 };

@@ -56,6 +56,15 @@
     "layerFlows": "Red de drenaje",
     "layerDesigns": "Diseños",
     "opacity": "Opacidad",
-    "twiError": "No se pudo cargar la capa TWI"
+    "twiError": "No se pudo cargar la capa TWI",
+    "saved": "Guardado",
+    "delete": "Eliminar",
+    "designLabel": "Nombre del diseño",
+    "designs": "Diseños",
+    "noDesigns": "No hay diseños guardados para esta parcela",
+    "untitledDesign": "Diseño sin nombre",
+    "showOnMap": "Ver en el mapa",
+    "confirmDelete": "¿Eliminar este diseño?",
+    "downloadGeoJson": "Descargar GeoJSON"
   }
 }

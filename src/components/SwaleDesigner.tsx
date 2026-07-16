@@ -14,9 +14,13 @@ const SwaleDesigner: React.FC<Props> = ({ parcelId }) => {
   const [trenchWidth, setTrenchWidth] = useState(2.0);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [label, setLabel] = useState('');
+  const [savedId, setSavedId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
 
   const suggest = async () => {
     setLoading(true);
+    setSavedId(undefined);
     try {
       const res = await api.suggestSwales({
         parcel_id: parcelId, bank_height: bankHeight, trench_depth: trenchDepth, trench_width: trenchWidth,
@@ -35,6 +39,28 @@ const SwaleDesigner: React.FC<Props> = ({ parcelId }) => {
       console.error('Swale suggestion failed:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const save = async () => {
+    if (!result?.lines?.length) return;
+    setSaving(true);
+    try {
+      const { id } = await api.saveDesign({
+        parcel_id: parcelId,
+        design_type: 'swale',
+        geometry: {
+          type: 'MultiLineString',
+          coordinates: result.lines.map((l: any) => l.coordinates),
+        },
+        parameters: { bank_height: bankHeight, trench_depth: trenchDepth, trench_width: trenchWidth },
+        label: label || t('hydrology:swaleDesigner'),
+      });
+      setSavedId(id);
+    } catch (e) {
+      console.error('Swale save failed:', e);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -60,10 +86,26 @@ const SwaleDesigner: React.FC<Props> = ({ parcelId }) => {
         {loading ? t('hydrology:loading') : t('hydrology:swaleDesigner')}
       </button>
       {result && result.lines?.length > 0 && (
-        <ExportMenu
-          designType="swale"
-          geometry={{ type: 'MultiLineString', coordinates: result.lines.map((l: any) => l.coordinates) }}
-        />
+        <>
+          <div className="flex gap-1 pt-1">
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('hydrology:designLabel')}
+              className="flex-1 border rounded px-2 py-1 text-sm"
+            />
+            <button onClick={save} disabled={saving}
+                    className="border px-3 py-1 rounded text-sm whitespace-nowrap disabled:opacity-60">
+              {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
+            </button>
+          </div>
+          <ExportMenu
+            designType="swale"
+            geometry={{ type: 'MultiLineString', coordinates: result.lines.map((l: any) => l.coordinates) }}
+            designId={savedId}
+          />
+        </>
       )}
     </div>
   );

@@ -130,6 +130,23 @@ export interface DesignSaveRequest {
   label?: string;
 }
 
+/** NGSI-LD normalized design entity as returned by list_designs (attrs are {type, value}). */
+export interface DesignEntity {
+  id: string;
+  type: string;
+  location?: { value?: GeoJSON.Geometry };
+  'nkz:designType'?: { value?: string };
+  'nkz:label'?: { value?: string };
+  'nkz:parameters'?: { value?: Record<string, unknown> };
+}
+
+/** Gateway-safe export envelope for gpx/kml (see backend export_design). */
+export interface ExportEnvelope {
+  filename: string;
+  mediaType: string;
+  content: string;
+}
+
 export interface TwiOverlayResponse {
   url: string | null;
   bounds: { west: number; south: number; east: number; north: number } | null;
@@ -160,13 +177,17 @@ export const api = {
   suggestCheckDams: (req: CheckDamSuggestRequest) => post('/design/check-dam/suggest', req),
 
   // Design CRUD
-  listDesigns: (parcelId: string) => get(`/design?parcel_id=${encodeURIComponent(parcelId)}`),
-  saveDesign: (req: DesignSaveRequest) => post('/design', req),
-  getDesign: (id: string) => get(`/design/${encodeURIComponent(id)}`),
+  listDesigns: (parcelId: string) =>
+    get<DesignEntity[]>(`/design?parcel_id=${encodeURIComponent(parcelId)}`),
+  saveDesign: (req: DesignSaveRequest) => post<{ id: string; status: string }>('/design', req),
+  getDesign: (id: string) => get<DesignEntity>(`/design/${encodeURIComponent(id)}`),
   updateDesign: (id: string, req: DesignSaveRequest) => put(`/design/${encodeURIComponent(id)}`, req),
   deleteDesign: (id: string) => del(`/design/${encodeURIComponent(id)}`),
 
-  // Export
-  getExportUrl: (designId: string, format: 'gpx' | 'kml' | 'geojson') =>
-    `${HYDRO_BASE}/design/${encodeURIComponent(designId)}/export?format=${format}`,
+  // Export — gpx/kml come back as a JSON envelope (gateway 502s non-JSON bodies);
+  // geojson returns a GeoJSON Feature. Callers build the Blob client-side.
+  exportDesign: (designId: string, format: 'gpx' | 'kml' | 'geojson') =>
+    get<ExportEnvelope | GeoJSON.Feature>(
+      `/design/${encodeURIComponent(designId)}/export?format=${format}`,
+    ),
 };

@@ -13,9 +13,13 @@ const CheckDamTool: React.FC<Props> = ({ parcelId }) => {
   const [width, setWidth] = useState(8.0);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [label, setLabel] = useState('');
+  const [savedId, setSavedId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
 
   const suggest = async () => {
     setLoading(true);
+    setSavedId(undefined);
     try {
       const res = await api.suggestCheckDams({
         parcel_id: parcelId, height, width,
@@ -37,6 +41,28 @@ const CheckDamTool: React.FC<Props> = ({ parcelId }) => {
     }
   };
 
+  const save = async () => {
+    if (!result?.dams?.length) return;
+    setSaving(true);
+    try {
+      const { id } = await api.saveDesign({
+        parcel_id: parcelId,
+        design_type: 'check_dam',
+        geometry: {
+          type: 'MultiPoint',
+          coordinates: result.dams.map((d: any) => d.coordinates),
+        },
+        parameters: { height, width },
+        label: label || t('hydrology:checkDam'),
+      });
+      setSavedId(id);
+    } catch (e) {
+      console.error('Check dam save failed:', e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-2">
       <div>
@@ -54,10 +80,26 @@ const CheckDamTool: React.FC<Props> = ({ parcelId }) => {
         {loading ? t('hydrology:loading') : t('hydrology:checkDam')}
       </button>
       {result && result.dams?.length > 0 && (
-        <ExportMenu
-          designType="check_dam"
-          geometry={{ type: 'MultiPoint', coordinates: result.dams.map((d: any) => d.coordinates) }}
-        />
+        <>
+          <div className="flex gap-1 pt-1">
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('hydrology:designLabel')}
+              className="flex-1 border rounded px-2 py-1 text-sm"
+            />
+            <button onClick={save} disabled={saving}
+                    className="border px-3 py-1 rounded text-sm whitespace-nowrap disabled:opacity-60">
+              {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
+            </button>
+          </div>
+          <ExportMenu
+            designType="check_dam"
+            geometry={{ type: 'MultiPoint', coordinates: result.dams.map((d: any) => d.coordinates) }}
+            designId={savedId}
+          />
+        </>
       )}
     </div>
   );

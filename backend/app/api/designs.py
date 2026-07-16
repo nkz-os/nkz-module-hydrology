@@ -503,8 +503,16 @@ def export_design(
     design_id: str,
     format: str = Query("geojson", pattern="^(geojson|gpx|kml)$"),
     auth: AuthContext = require_auth(),
-):
-    """Export a design in GPX, KML, or GeoJSON format."""
+) -> dict:
+    """Export a design in GPX, KML, or GeoJSON format.
+
+    GPX/KML are returned as a JSON envelope ``{filename, mediaType, content}``
+    rather than a raw XML body: the api-gateway auto-proxy
+    (``safe_json_proxy_response``) 502s any non-JSON Content-Type, so an
+    ``application/gpx+xml`` / KML response never reaches the browser. The
+    frontend rebuilds the Blob from ``content`` + ``mediaType``. ``geojson``
+    stays a GeoJSON Feature (already JSON, gateway-safe).
+    """
     try:
         orion = SyncOrionClient(auth.tenant_id)
         entity = orion.get_entity(design_id)
@@ -519,12 +527,16 @@ def export_design(
     name = (entity.get("nkz:label", {}) or {}).get("value", "Hydrology Design")
 
     if format == "gpx":
-        from fastapi.responses import Response
-        gpx = geometry_to_gpx(geom, name)
-        return Response(content=gpx, media_type="application/gpx+xml")
+        return {
+            "filename": f"{name}.gpx",
+            "mediaType": "application/gpx+xml",
+            "content": geometry_to_gpx(geom, name),
+        }
     elif format == "kml":
-        from fastapi.responses import Response
-        kml = geometry_to_kml(geom, name)
-        return Response(content=kml, media_type="application/vnd.google-earth.kml+xml")
+        return {
+            "filename": f"{name}.kml",
+            "mediaType": "application/vnd.google-earth.kml+xml",
+            "content": geometry_to_kml(geom, name),
+        }
     else:
         return {"type": "Feature", "geometry": geom, "properties": {"name": name}}

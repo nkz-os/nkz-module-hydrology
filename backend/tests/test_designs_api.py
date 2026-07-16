@@ -210,6 +210,66 @@ def test_export_requires_auth():
     assert resp.status_code == 401
 
 
+def test_export_gpx_returns_json_envelope():
+    """gpx export must return a JSON envelope, not a raw application/gpx+xml body.
+
+    The api-gateway auto-proxy 502s any non-JSON Content-Type, so the endpoint
+    returns {filename, mediaType, content} and the frontend builds the Blob.
+    """
+    from app.api import designs
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.return_value = {
+            "location": {"value": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}},
+            "nkz:label": {"value": "My Keyline"},
+        }
+        out = designs.export_design(
+            design_id="d1", format="gpx", auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    assert out["filename"] == "My Keyline.gpx"
+    assert out["mediaType"] == "application/gpx+xml"
+    assert out["content"].startswith("<?xml")
+    assert "<gpx" in out["content"]
+
+
+def test_export_kml_returns_json_envelope():
+    """kml export must return a JSON envelope with the KML media type."""
+    from app.api import designs
+
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.return_value = {
+            "location": {"value": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}},
+            "nkz:label": {"value": "My Swale"},
+        }
+        out = designs.export_design(
+            design_id="d1", format="kml", auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    assert out["filename"] == "My Swale.kml"
+    assert out["mediaType"] == "application/vnd.google-earth.kml+xml"
+    assert "<kml" in out["content"]
+
+
+def test_export_geojson_stays_feature():
+    """geojson export is unchanged: a GeoJSON Feature (already JSON, gateway-safe)."""
+    from app.api import designs
+
+    geom = {"type": "LineString", "coordinates": [[0, 0], [1, 1]]}
+    with patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.return_value = {
+            "location": {"value": geom},
+            "nkz:label": {"value": "GeoJSON Design"},
+        }
+        out = designs.export_design(
+            design_id="d1", format="geojson", auth=SimpleNamespace(tenant_id="t1"),
+        )
+
+    assert out["type"] == "Feature"
+    assert out["geometry"] == geom
+    assert out["properties"]["name"] == "GeoJSON Design"
+
+
 def test_generation_endpoints_require_auth():
     """All 4 generation endpoints require auth (return 401 without)."""
     from app.api.designs import router

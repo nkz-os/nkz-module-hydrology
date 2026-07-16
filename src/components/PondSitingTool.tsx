@@ -17,6 +17,9 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
   const [center, setCenter] = useState<[number, number] | null>(null);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [label, setLabel] = useState('');
+  const [savedId, setSavedId] = useState<string | undefined>();
+  const [saving, setSaving] = useState(false);
   const drawingRef = useRef<DrawingManager | null>(null);
 
   // Cancel any in-progress map drawing when the tool unmounts.
@@ -40,6 +43,7 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
   const score = async () => {
     if (!center) return;
     setLoading(true);
+    setSavedId(undefined);
     try {
       const res = await api.scorePond({
         parcel_id: parcelId, center, radius, depth,
@@ -59,6 +63,31 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
       console.error('Pond scoring failed:', e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const save = async () => {
+    if (!center || !result) return;
+    setSaving(true);
+    try {
+      const { id } = await api.saveDesign({
+        parcel_id: parcelId,
+        design_type: 'pond',
+        geometry: { type: 'Point', coordinates: center },
+        parameters: {
+          radius,
+          depth,
+          capacity: Math.PI * radius * radius * depth,
+          pondScore: result.pondScore,
+          isViable: result.isViable,
+        },
+        label: label || t('hydrology:pondSiting'),
+      });
+      setSavedId(id);
+    } catch (e) {
+      console.error('Pond save failed:', e);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -111,7 +140,20 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
           <p className={result.isViable ? 'text-green-600' : 'text-red-500'}>
             {result.isViable ? t('hydrology:viable') : t('hydrology:notViable')}
           </p>
-          <ExportMenu designType="pond" geometry={{ type: 'Point', coordinates: center }} />
+          <div className="flex gap-1 pt-1">
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder={t('hydrology:designLabel')}
+              className="flex-1 border rounded px-2 py-1 text-sm"
+            />
+            <button onClick={save} disabled={saving}
+                    className="border px-3 py-1 rounded text-sm whitespace-nowrap disabled:opacity-60">
+              {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
+            </button>
+          </div>
+          <ExportMenu designType="pond" geometry={{ type: 'Point', coordinates: center }} designId={savedId} />
         </div>
       )}
     </div>
