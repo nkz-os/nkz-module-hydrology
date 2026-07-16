@@ -3,6 +3,20 @@ import { lazy } from 'react';
 export const moduleSlots = {
   'map-layer': [
     {
+      id: 'hydrology-twi-overlay',
+      moduleId: 'hydrology',
+      component: 'TwiOverlayLayer',
+      localComponent: lazy(() => import('../components/TwiOverlayLayer')),
+      priority: 10,
+    },
+    {
+      id: 'hydrology-flows',
+      moduleId: 'hydrology',
+      component: 'FlowsLayer',
+      localComponent: lazy(() => import('../components/FlowsLayer')),
+      priority: 12,
+    },
+    {
       id: 'hydrology-zonal',
       moduleId: 'hydrology',
       component: 'HydrologyZonalLayer',

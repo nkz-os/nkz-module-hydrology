@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useViewer } from '@nekazari/sdk';
 import { api } from '../services/api';
+import { useHydrologyLayerContext } from '../services/layerContext';
 import { DrawingManager } from './DrawingManager';
 import ExportMenu from './ExportMenu';
 
@@ -10,6 +11,7 @@ interface Props { parcelId: string; }
 const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
   const { t } = useTranslation();
   const { cesiumViewer } = useViewer();
+  const { setDesigns, setDesignsVisible } = useHydrologyLayerContext();
   const [radius, setRadius] = useState(20);
   const [depth, setDepth] = useState(3);
   const [center, setCenter] = useState<[number, number] | null>(null);
@@ -43,6 +45,16 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
         parcel_id: parcelId, center, radius, depth,
       });
       setResult(res);
+
+      if (res.isViable) {
+        setDesigns([{
+          id: 'pond',
+          type: 'pond',
+          geometry: { type: 'Point', coordinates: center },
+          radius,
+        }]);
+        setDesignsVisible(true);
+      }
     } catch (e) {
       console.error('Pond scoring failed:', e);
     } finally {

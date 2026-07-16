@@ -51,6 +51,11 @@
     "analysisFailed": "Analysis failed",
     "runAnalysisCta": "Run analysis",
     "pickOnMap": "Pick on map",
-    "centerPicked": "Center"
+    "centerPicked": "Center",
+    "layerTwi": "TWI overlay",
+    "layerFlows": "Drainage network",
+    "layerDesigns": "Designs",
+    "opacity": "Opacity",
+    "twiError": "Could not load the TWI overlay"
   }
 }

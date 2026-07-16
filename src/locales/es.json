@@ -51,6 +51,11 @@
     "analysisFailed": "El análisis ha fallado",
     "runAnalysisCta": "Ejecutar análisis",
     "pickOnMap": "Elegir en el mapa",
-    "centerPicked": "Centro"
+    "centerPicked": "Centro",
+    "layerTwi": "Capa TWI",
+    "layerFlows": "Red de drenaje",
+    "layerDesigns": "Diseños",
+    "opacity": "Opacidad",
+    "twiError": "No se pudo cargar la capa TWI"
   }
 }

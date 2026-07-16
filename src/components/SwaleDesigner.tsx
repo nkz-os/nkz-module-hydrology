@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
+import { useHydrologyLayerContext } from '../services/layerContext';
 import ExportMenu from './ExportMenu';
 
 interface Props { parcelId: string; }
 
 const SwaleDesigner: React.FC<Props> = ({ parcelId }) => {
   const { t } = useTranslation();
+  const { setDesigns, setDesignsVisible } = useHydrologyLayerContext();
   const [bankHeight, setBankHeight] = useState(0.5);
   const [trenchDepth, setTrenchDepth] = useState(1.0);
   const [trenchWidth, setTrenchWidth] = useState(2.0);
@@ -18,8 +20,17 @@ const SwaleDesigner: React.FC<Props> = ({ parcelId }) => {
     try {
       const res = await api.suggestSwales({
         parcel_id: parcelId, bank_height: bankHeight, trench_depth: trenchDepth, trench_width: trenchWidth,
-      });
+      }) as { lines?: Array<{ coordinates: number[][] }> };
       setResult(res);
+
+      if (res.lines?.length) {
+        setDesigns([{
+          id: 'swale',
+          type: 'swale',
+          geometry: { type: 'MultiLineString', coordinates: res.lines.map((l) => l.coordinates) },
+        }]);
+        setDesignsVisible(true);
+      }
     } catch (e) {
       console.error('Swale suggestion failed:', e);
     } finally {

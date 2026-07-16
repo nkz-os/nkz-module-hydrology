@@ -130,6 +130,12 @@ export interface DesignSaveRequest {
   label?: string;
 }
 
+export interface TwiOverlayResponse {
+  url: string | null;
+  bounds: { west: number; south: number; east: number; north: number } | null;
+  status: 'ok' | 'not_generated' | string;
+}
+
 export const api = {
   // DEM analysis (async job)
   analyzeParcel: (parcelId: string) =>
@@ -138,6 +144,14 @@ export const api = {
 
   // Zones
   getZones: (parcelId: string) => get<ZoneKpi[]>(`/parcels/${encodeURIComponent(parcelId)}/zones`),
+
+  // Visualization overlays (JSON through the same-origin gateway)
+  getTwiOverlay: (parcelId: string) =>
+    get<TwiOverlayResponse>(`/visualization/${encodeURIComponent(parcelId)}/overlay/twi`),
+  getFlows: (parcelId: string) =>
+    get<GeoJSON.FeatureCollection>(`/visualization/${encodeURIComponent(parcelId)}/flows`),
+  checkFlows: (parcelId: string) =>
+    get<{ exists: boolean }>(`/visualization/${encodeURIComponent(parcelId)}/flows/check`),
 
   // Design generation
   generateKeyline: (req: KeylineRequest) => post<KeylineResponse>('/design/keyline/generate', req),

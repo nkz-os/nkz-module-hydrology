@@ -1,12 +1,15 @@
 import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
+import { useHydrologyLayerContext } from '../services/layerContext';
+import type { DesignGeometry } from '../services/layerStore';
 import ExportMenu from './ExportMenu';
 
 interface Props { parcelId: string; }
 
 const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   const { t } = useTranslation();
+  const { setDesigns, setDesignsVisible } = useHydrologyLayerContext();
   const [grade, setGrade] = useState(0.5);
   const [spacing, setSpacing] = useState(12);
   const [lines, setLines] = useState(7);
@@ -20,6 +23,21 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
         parcel_id: parcelId, grade: grade / 100, spacing, lines,
       });
       setResult(res);
+
+      const geoms: DesignGeometry[] = [];
+      if (res.keyline) {
+        geoms.push({
+          id: 'keyline-primary',
+          type: 'keyline',
+          geometry: res.keyline,
+          label: t('hydrology:primaryKeyline'),
+        });
+      }
+      (res.parallel_lines || []).forEach((p, i) => {
+        geoms.push({ id: `keyline-parallel-${i}`, type: 'keyline', geometry: p.geometry });
+      });
+      setDesigns(geoms);
+      setDesignsVisible(true);
     } catch (e) {
       console.error('Keyline generation failed:', e);
     } finally {
