@@ -99,8 +99,22 @@ def test_summary_query_uses_or_pipe_and_keyvalues():
         MockOrion.return_value.query_entities.return_value = []
         zones.get_parcel_summary(parcel_id=pid, auth=SimpleNamespace(tenant_id="t1"))
     _, kwargs = MockOrion.return_value.query_entities.call_args
-    assert kwargs["q"] == f'(hasAgriParcel=="{pid}"|refAgriParcel=="{pid}")'
+    assert kwargs["q"] == f'(hasAgriParcel=="{pid}"|refAgriParcel=="{pid}");nkz:demSource'
     assert kwargs["options"] == "keyValues"
+
+
+def test_summary_query_discriminates_hydrology_server_side():
+    """q must carry the nkz:demSource existence term so weather-map's records
+    (same type, same parcel) never crowd hydrology out of the limit=100 page."""
+    from app.api import zones
+    with patch.object(zones, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.query_entities.return_value = []
+        zones.get_parcel_summary(
+            parcel_id="urn:ngsi-ld:AgriParcel:p1",
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+    _, kwargs = MockOrion.return_value.query_entities.call_args
+    assert ";nkz:demSource" in kwargs["q"]
 
 
 def test_summary_requires_auth():

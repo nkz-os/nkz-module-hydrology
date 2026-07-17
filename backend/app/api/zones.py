@@ -102,9 +102,13 @@ def get_parcel_summary(
     """
     try:
         orion = SyncOrionClient(auth.tenant_id)
+        # nkz:demSource existence term: hydrology records always stamp it
+        # (entity_publisher.build_hydrology_record) — server-side discrimination
+        # so foreign AgriParcelRecord (weather-map) can't crowd hydrology out of
+        # the limit=100 page. The id-prefix post-filter stays as defense-in-depth.
         entities = orion.query_entities(
             type="AgriParcelRecord",
-            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
+            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}");nkz:demSource',
             options="keyValues",
             limit=100,
         )
