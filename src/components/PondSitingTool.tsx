@@ -170,9 +170,12 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
               </div>
               <p className="text-[10px] text-nkz-muted mt-1">
                 {t('hydrology:complianceDetail', {
-                  volume: result.compliance.volumeM3,
+                  capacity: result.compliance.storageCapacityM3,
                   threshold: result.compliance.permitThresholdM3,
                 })}
+              </p>
+              <p className="text-[10px] text-nkz-muted mt-1 italic">
+                {t('hydrology:complianceDisclaimer')}
               </p>
             </div>
           )}

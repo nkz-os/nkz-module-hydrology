@@ -11,9 +11,12 @@ References
 
 from typing import Optional
 
-# Water permit thresholds (m³/year) by basin authority (CHX).
+# Water permit thresholds (m³, storage capacity) by basin authority (CHX).
 # Source: MITECO — Confederaciones Hidrográficas.
-# Volumes above the threshold require an explicit water use permit.
+# Ponds whose storage capacity exceeds the threshold require an explicit water
+# use permit. Capacity is used (not annual captured volume) because it is
+# geometrically computable and is a real CHX basis for small balsas; annual
+# capture would need an annual-precipitation source the platform does not expose.
 PERMIT_THRESHOLDS_M3: dict[str, int] = {
     "CH_Ebro": 7000,
     "CH_Duero": 5000,
@@ -30,12 +33,12 @@ PERMIT_THRESHOLDS_M3: dict[str, int] = {
 
 
 def requires_water_permit(volume_m3: float, basin: str = "default") -> bool:
-    """Check if water capture volume exceeds the permit threshold for a basin.
+    """Check if a pond's storage capacity exceeds the permit threshold for a basin.
 
     Parameters
     ----------
     volume_m3 : float
-        Annual water capture volume (m³).
+        Pond storage capacity (m³) — geometric max storage (π·r²·depth).
     basin : str, optional
         Basin authority identifier (e.g. ``"CH_Ebro"``, ``"CH_Segura"``).
         Falls back to ``"default"`` if the basin is not recognised.
@@ -74,7 +77,7 @@ def breach_risk_class(
     Parameters
     ----------
     volume_m3 : float
-        Water volume stored / captured (m³).
+        Pond storage capacity (m³).
     slope_pct : float
         Terrain slope at the intervention site (percent).
     has_downstream_exposure : bool

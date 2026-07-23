@@ -123,8 +123,9 @@ export interface PondScoreRequest {
 }
 
 export interface PondCompliance {
+  basis: 'storage_capacity' | string;
   basin: string;
-  volumeM3: number;
+  storageCapacityM3: number;
   requiresPermit: boolean;
   permitThresholdM3: number;
   localSlopePct: number;
@@ -135,6 +136,7 @@ export interface PondCompliance {
     affectedRoads: number;
     affectedStreams: number;
   };
+  disclaimer?: string;
 }
 
 export interface PondScoreResponse {
