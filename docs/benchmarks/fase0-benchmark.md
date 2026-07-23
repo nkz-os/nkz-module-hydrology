@@ -1,3 +1,9 @@
+---
+title: "Fase 0 Benchmark — geolibre-wasm"
+description: "Performance benchmark of the geolibre-wasm DEM engine on a 200x200 synthetic DEM (Fase 0)."
+sidebar.order: 3
+---
+
 # Fase 0 benchmark — geolibre-wasm (200×200 synthetic DEM @ 1m)
 
 Date: 2026-06-20

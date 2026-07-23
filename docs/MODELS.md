@@ -1,3 +1,9 @@
+---
+title: "Hydrology Models Reference"
+description: "Numerical models in NKZ Water Studio: TWI, SCS-CN, MUSLE, bucket, pond, zones, scenarios, compliance, alerts."
+sidebar.order: 2
+---
+
 # Hydrology Models Reference
 
 Reference for the numerical models in NKZ Water Studio. Inputs come from the
