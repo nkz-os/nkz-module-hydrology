@@ -73,6 +73,7 @@ def get_parcel_zones(
                 "nkz:twiRange",
                 "nkz:areaHa",
                 "nkz:runoffMm",
+                "nkz:peakFlowM3s",
                 "nkz:sedimentYieldTonnes",
                 "nkz:soilSaturationPct",
                 "nkz:pondViability",
@@ -83,6 +84,12 @@ def get_parcel_zones(
                     zone[key.replace("nkz:", "")] = val.get("value")
                 else:
                     zone[key.replace("nkz:", "")] = val
+            # Geometry (GeoProperty) so the viewer can render zone polygons.
+            loc = e.get("location")
+            if isinstance(loc, dict):
+                gval = loc.get("value")
+                if isinstance(gval, dict) and gval.get("type"):
+                    zone["geometry"] = gval
             zones.append(zone)
         return zones
     except Exception as e:

@@ -427,25 +427,60 @@ def _stream_length_m(geojson_bytes: bytes) -> float:
 
 
 def _compute_zones(result: dict) -> list[dict]:
-    """5 TWI quintile zones from the TWI raster (masked to parcel)."""
-    twi = _read_raster(result["twi.tif"]).ravel()
-    twi = twi[np.isfinite(twi)]
-    if twi.size == 0:
+    """5 TWI quintile zones WITH real polygon geometry.
+
+    Boundaries are emitted as ``twiRange`` strings (e.g. ``-inf-6.0``) so
+    ``extract_zonal_stats`` can reproduce the exact same pixel masks for
+    area/slope stats. Geometry is built from those same masks (consistency),
+    unioned + simplified in UTM, then reprojected to WGS84 for the broker
+    (every consumer — Cesium, GPX/KML, GIS-routing — expects lon/lat).
+    """
+    from rasterio.features import shapes
+    from rasterio.warp import transform_geom
+    from shapely.geometry import shape as shp_shape, mapping
+    from shapely.ops import unary_union
+
+    with rasterio.open(io.BytesIO(result["twi.tif"])) as ds:
+        twi = ds.read(1)
+        transform = ds.transform
+        crs = ds.crs
+        res_m = max(abs(transform.a), abs(transform.e))
+
+    valid = np.isfinite(twi)
+    flat = twi[valid]
+    if flat.size == 0:
         return []
+    quintiles = np.quantile(flat, [0.2, 0.4, 0.6, 0.8])
     labels = ["twi-very-low", "twi-low", "twi-medium", "twi-high", "twi-very-high"]
-    quintiles = np.quantile(twi, [0.2, 0.4, 0.6, 0.8])
     zones = []
     for i, lab in enumerate(labels):
-        lo = -np.inf if i == 0 else quintiles[i - 1]
-        hi = np.inf if i == 4 else quintiles[i]
-        mask = (twi > lo) & (twi <= hi)
-        if mask.any():
-            zones.append({
-                "zone_id": lab, "geometry": {},
-                "twiMean": float(twi[mask].mean()),
-                "twiRange": f"{lo:.1f}-{hi:.1f}", "areaHa": 0.0,
-                "pixelCount": int(mask.sum()),
-            })
+        lo = -np.inf if i == 0 else float(quintiles[i - 1])
+        hi = np.inf if i == 4 else float(quintiles[i])
+        mask = valid & (twi > lo) & (twi <= hi)
+        count = int(mask.sum())
+        if count == 0:
+            continue
+        # Polygonize the zone mask in UTM, union + simplify (metric tolerance),
+        # then reproject to WGS84. A raw per-pixel polygonization would emit
+        # thousands of tiny rings; unary_union + simplify collapses them.
+        geometry: dict = {}
+        polys = [
+            shp_shape(g)
+            for g, v in shapes(mask.astype("uint8"), mask=mask, transform=transform)
+            if v == 1
+        ]
+        if polys:
+            merged = unary_union(polys).simplify(tolerance=res_m, preserve_topology=False)
+            if not merged.is_empty:
+                geometry = transform_geom(crs, "EPSG:4326", mapping(merged))
+        zones.append({
+            "zone_id": lab,
+            "geometry": geometry,
+            "twiMean": float(twi[mask].mean()),
+            "twiRange": f"{lo:.1f}-{hi:.1f}",
+            "areaHa": round(count * res_m * res_m / 1e4, 4),
+            "pixelCount": count,
+        })
     return zones
 
 
