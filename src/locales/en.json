@@ -55,6 +55,7 @@
     "layerTwi": "TWI overlay",
     "layerFlows": "Drainage network",
     "layerDesigns": "Designs",
+    "layerZones": "TWI zones",
     "opacity": "Opacity",
     "twiError": "Could not load the TWI overlay",
     "saved": "Saved",

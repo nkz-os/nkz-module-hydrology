@@ -15,6 +15,7 @@ interface HydrologyLayerControls extends HydrologyLayerState {
   setTwiOpacity: (opacity: number) => void;
   setTwiStatus: (status: TwiStatus) => void;
   setFlowsVisible: (visible: boolean) => void;
+  setZonesVisible: (visible: boolean) => void;
   setDesignsVisible: (visible: boolean) => void;
   setDesigns: (designs: DesignGeometry[]) => void;
 }
@@ -30,6 +31,7 @@ export function useHydrologyLayerContext(): HydrologyLayerControls {
   const setTwiOpacity = useCallback((twiOpacity: number) => setHydrologyLayerState({ twiOpacity }), []);
   const setTwiStatus = useCallback((twiStatus: TwiStatus) => setHydrologyLayerState({ twiStatus }), []);
   const setFlowsVisible = useCallback((flowsVisible: boolean) => setHydrologyLayerState({ flowsVisible }), []);
+  const setZonesVisible = useCallback((zonesVisible: boolean) => setHydrologyLayerState({ zonesVisible }), []);
   const setDesignsVisible = useCallback(
     (designsVisible: boolean) => setHydrologyLayerState({ designsVisible }),
     [],
@@ -42,6 +44,7 @@ export function useHydrologyLayerContext(): HydrologyLayerControls {
     setTwiOpacity,
     setTwiStatus,
     setFlowsVisible,
+    setZonesVisible,
     setDesignsVisible,
     setDesigns,
   };

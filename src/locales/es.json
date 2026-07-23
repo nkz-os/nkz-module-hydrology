@@ -55,6 +55,7 @@
     "layerTwi": "Capa TWI",
     "layerFlows": "Red de drenaje",
     "layerDesigns": "Diseños",
+    "layerZones": "Zonas TWI",
     "opacity": "Opacidad",
     "twiError": "No se pudo cargar la capa TWI",
     "saved": "Guardado",

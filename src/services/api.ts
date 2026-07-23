@@ -57,10 +57,12 @@ export interface ZoneKpi {
   twiRange: string;
   areaHa: number;
   runoffMm?: number;
+  peakFlowM3s?: number;
   sedimentYieldTonnes?: number;
   soilSaturationPct?: number;
   pondViability?: number;
   keylineGrade?: number;
+  geometry?: GeoJSON.Geometry | null;
 }
 
 export type DataFidelity = 'ign_5m' | 'ign_25m' | 'degraded_flat' | 'unavailable' | string;
