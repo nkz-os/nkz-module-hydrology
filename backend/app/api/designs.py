@@ -467,6 +467,8 @@ def update_design(
         # inject_fiware_headers only adds Link when the CONTEXT_URL env var is
         # set; hydrology prod does not set it, so guarantee the platform-context
         # Link ourselves or Orion silently drops every nkz:* attr (spec §6.2).
+        # TODO(phase1.5): once CONTEXT_URL is set in the hydrology deployment env
+        # (gitops overlay), migrate to `await OrionClient(tenant).update_entity_attrs(id, attrs)` and drop this httpx.patch + manual Link.
         headers = inject_fiware_headers({}, auth.tenant_id, has_context_in_body=False)
         headers.setdefault(
             "Link",
