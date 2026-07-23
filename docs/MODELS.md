@@ -61,14 +61,23 @@ current capture designs.
 
 ## 8. Compliance (`compliance.py`)
 
-- **Water permit** — CHX basin thresholds (`PERMIT_THRESHOLDS_M3`, m³/year):
-  Ebro/Minho-Sil 7000, Duero/Tajo/Guadiana/Guadalquivir/Cantábrico 5000,
-  Segura/Júcar 3000, default 5000. Volumes above the threshold require a permit.
-- **Breach risk** — `low` / `medium` / `high` from volume, local slope (3×3
-  finite difference on the DEM) and downstream exposure.
-- **ASSUMPTION:** downstream exposure defaults to `False` (no infrastructure
-  layer bundled); basin auto-detection from coordinates needs a CHX polygon
-  asset (deferred) — the caller selects the basin.
+- **Water permit** — compares the pond's **storage capacity** (π·r²·depth, m³)
+  against CHX basin thresholds (`PERMIT_THRESHOLDS_M3`): Ebro/Minho-Sil 7000,
+  Duero/Tajo/Guadiana/Guadalquivir/Cantábrico 5000, Segura/Júcar 3000, default
+  5000. Capacity above the threshold → permit required.
+- **Why capacity, not annual capture** — storage-capacity thresholds are a real
+  CHX basis for small balsas and are geometrically computable. Annual captured
+  volume (contributing area × annual runoff) would be more precise but needs an
+  annual-precipitation source the platform does not expose (weather-map has no
+  annual/historical endpoint). The contributing area IS available (flow
+  accumulation) for a future capture-based refinement.
+- **Breach risk** — `low` / `medium` / `high` from storage capacity, local slope
+  (3×3 finite difference on the DEM) and downstream exposure.
+- **Disclaimer** — the response carries `disclaimer`: estimate, not legal
+  advice; verify with the CHX basin authority.
+- **ASSUMPTIONS** — downstream exposure defaults to `False` (no infrastructure
+  layer); basin auto-detection from coordinates needs a CHX polygon asset
+  (deferred) — the caller selects the basin.
 
 ## 9. Alerts (`alerts.py`, reactive)
 

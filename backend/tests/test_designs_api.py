@@ -354,9 +354,13 @@ def test_score_pond_returns_compliance_block():
         )
     assert resp["status"] == "ok"
     comp = resp["compliance"]
+    assert comp["basis"] == "storage_capacity"
     assert comp["basin"] == "CH_Segura"
     assert comp["permitThresholdM3"] == 3000  # CH_Segura threshold
-    # volume = pi*30^2*0.1 ~= 282.7 m³ < 3000 -> no permit, low breach risk.
-    assert comp["requiresPermit"] is False
+    # storage capacity = π·30²·2 ≈ 5654.9 m³ > 3000 -> permit required.
+    assert comp["storageCapacityM3"] == round(np.pi * 30 ** 2 * 2, 1)
+    assert comp["requiresPermit"] is True
+    # breach risk: volume > 5000 (+1), flat slope, no downstream -> low.
     assert comp["breachRisk"] == "low"
+    assert comp["disclaimer"]
     assert comp["downstreamExposure"]["hasExposure"] is False

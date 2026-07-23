@@ -153,18 +153,24 @@ def score_pond(
         ksat_mmh=15.0,
     )
 
-    # Compliance (Phase 2.1): CHX water-permit threshold + breach risk.
-    # ASSUMPTION: downstream exposure defaults to False — no infrastructure
-    # (buildings/roads) layer is bundled; basin auto-detection needs a CHX
-    # polygon asset (deferred). breachRisk still reflects volume + local slope.
+    # Compliance (Phase 2.1, revised): the CHX permit threshold compares the
+    # pond's STORAGE CAPACITY (π·r²·depth), NOT a runoff-yield figure.
+    # Storage-capacity thresholds are a real CHX basis for small balsas and are
+    # geometrically computable without an annual-precipitation source (which the
+    # platform does not expose). The earlier yield-based check (pond footprint ×
+    # 100 mm) grossly under-reported and could advise "no permit" when one was
+    # required. See docs/MODELS.md §8.
+    # ASSUMPTION: downstream exposure defaults to False (no infrastructure layer);
+    # basin auto-detection needs a CHX polygon asset (deferred).
+    storage_capacity_m3 = catchment_area_m2 * req.depth  # cylindrical upper bound
     slope_pct = _local_slope_pct(dem_arr, row, col, transform)
-    volume_m3 = catchment_yield_m3
-    requires_permit = requires_water_permit(volume_m3, req.basin)
+    requires_permit = requires_water_permit(storage_capacity_m3, req.basin)
     permit_threshold = PERMIT_THRESHOLDS_M3.get(req.basin, PERMIT_THRESHOLDS_M3["default"])
-    breach = breach_risk_class(volume_m3, slope_pct, has_downstream_exposure=False)
+    breach = breach_risk_class(storage_capacity_m3, slope_pct, has_downstream_exposure=False)
     compliance = {
+        "basis": "storage_capacity",
         "basin": req.basin,
-        "volumeM3": round(volume_m3, 1),
+        "storageCapacityM3": round(storage_capacity_m3, 1),
         "requiresPermit": requires_permit,
         "permitThresholdM3": permit_threshold,
         "localSlopePct": round(slope_pct, 1),
@@ -175,6 +181,10 @@ def score_pond(
             "affectedRoads": 0,
             "affectedStreams": 0,
         },
+        "disclaimer": (
+            "Estimate based on storage capacity; not legal advice. "
+            "Verify with your CHX basin authority before building."
+        ),
     }
 
     return {
