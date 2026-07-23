@@ -17,8 +17,8 @@ INSERT INTO marketplace_modules (
     metadata
 ) VALUES (
     'hydrology', 'hydrology', 'NKZ Water Studio',
-    'NKZ Water Studio — DEM watershed & flow analysis (beta). Hydrological modeling capabilities in active development.',
-    '/modules/hydrology/mf-manifest.json', '0.0.1-beta', 'nkz-os', 'hydrology',
+    'NKZ Water Studio — DEM analysis, hydrological modeling, water-harvesting design, scenario comparison, compliance checking and runoff-risk alerts for agricultural parcels.',
+    '/modules/hydrology/mf-manifest.json', '1.0.0', 'nkz-os', 'hydrology',
     '/hydrology', 'NKZ Water Studio', false, true,
     ARRAY['Farmer', 'TenantAdmin', 'PlatformAdmin'],
     0,
@@ -26,10 +26,18 @@ INSERT INTO marketplace_modules (
         "icon": "droplets",
         "color": "#06B6D4",
         "maturity": "beta",
-        "shortDescription": "DEM watershed & flow analysis (beta)",
+        "shortDescription": "Hydrology, water-harvesting design & compliance",
         "features": [
-            "DEM-based watershed delineation (beta)",
-            "Stream network extraction"
+            "DEM cascade (eu-elevation) + TWI overlay",
+            "Flow direction & stream network",
+            "SCS-CN runoff + MUSLE sediment + soil-moisture bucket",
+            "Zonal KPI analysis with real polygon geometry",
+            "Keyline / pond / swale / check-dam design",
+            "Design CRUD & GeoJSON/GPX/KML export",
+            "Scenario comparison (baseline vs intervention)",
+            "CHX water-permit compliance & breach risk",
+            "Reactive runoff-risk alerts (Dunne/Hortonian)",
+            "GIS-routing integration"
         ],
         "setup_parcel_url": "http://hydrology-api-service:8000/api/v1/hydrology/internal/setup-parcel",
         "backend_url": "http://hydrology-api-service:8000",

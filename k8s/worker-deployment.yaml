@@ -19,7 +19,9 @@ spec:
     spec:
       containers:
         - name: worker
-          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend:19bc884
+          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend:latest
+          # Template only — production tag (full SHA) is pinned in
+          # gitops-config/overlays/modules/hydrology/*-deployment.yaml
           imagePullPolicy: IfNotPresent
           command: ["rq", "worker", "hydrology-processing", "--url", "$(REDIS_URL)"]
           envFrom:
