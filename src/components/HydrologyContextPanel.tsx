@@ -9,11 +9,13 @@ import PondSitingTool from './PondSitingTool';
 import SwaleDesigner from './SwaleDesigner';
 import CheckDamTool from './CheckDamTool';
 import DesignManager from './DesignManager';
+import ScenarioPanel from './ScenarioPanel';
 
-type TabId = 'kpis' | 'keyline' | 'pond' | 'swale' | 'dam' | 'designs';
+type TabId = 'kpis' | 'scenarios' | 'keyline' | 'pond' | 'swale' | 'dam' | 'designs';
 
 const TABS: { id: TabId; labelKey: string }[] = [
   { id: 'kpis', labelKey: 'hydrology:zonalKpis' },
+  { id: 'scenarios', labelKey: 'hydrology:scenarios' },
   { id: 'keyline', labelKey: 'hydrology:keylineDesigner' },
   { id: 'pond', labelKey: 'hydrology:pondSiting' },
   { id: 'swale', labelKey: 'hydrology:swaleDesigner' },
@@ -129,6 +131,7 @@ const HydrologyContextPanel: React.FC = () => {
           />
         </>
       )}
+      {activeTab === 'scenarios' && <ScenarioPanel parcelId={parcelId} refreshKey={refreshKey} />}
       {activeTab === 'keyline' && <KeylineDesigner parcelId={parcelId} />}
       {activeTab === 'pond' && <PondSitingTool parcelId={parcelId} />}
       {activeTab === 'swale' && <SwaleDesigner parcelId={parcelId} />}

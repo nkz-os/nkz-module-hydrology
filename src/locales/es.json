@@ -80,6 +80,17 @@
     "fidelity_ign_5m": "IGN 5m",
     "fidelity_ign_25m": "IGN 25m",
     "fidelity_degraded_flat": "Plano (degradado)",
-    "fidelity_unavailable": "No disponible"
+    "fidelity_unavailable": "No disponible",
+    "scenarios": "Escenarios",
+    "scenarioNoData": "Ejecuta el análisis DEM para ver escenarios",
+    "scenarioMetric": "Métrica",
+    "scenarioBaseline": "Base",
+    "scenarioIntervention": "Intervención",
+    "scenarioCaptured": "Agua capturada (m³)",
+    "scenarioSediment": "Sedimento retenido (t)",
+    "scenarioEarthwork": "Movimiento de tierras (m³)",
+    "scenarioInvestment": "Inversión (€)",
+    "scenarioAutonomy": "Autonomía hídrica (%)",
+    "scenarioDesigns": "{{count}} diseños considerados"
   }
 }

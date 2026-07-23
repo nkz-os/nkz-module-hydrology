@@ -80,6 +80,17 @@
     "fidelity_ign_5m": "IGN 5m",
     "fidelity_ign_25m": "IGN 25m",
     "fidelity_degraded_flat": "Flat (degraded)",
-    "fidelity_unavailable": "Unavailable"
+    "fidelity_unavailable": "Unavailable",
+    "scenarios": "Scenarios",
+    "scenarioNoData": "Run DEM analysis to see scenarios",
+    "scenarioMetric": "Metric",
+    "scenarioBaseline": "Baseline",
+    "scenarioIntervention": "Intervention",
+    "scenarioCaptured": "Water captured (m³)",
+    "scenarioSediment": "Sediment retained (t)",
+    "scenarioEarthwork": "Earthwork (m³)",
+    "scenarioInvestment": "Investment (€)",
+    "scenarioAutonomy": "Water autonomy (%)",
+    "scenarioDesigns": "{{count}} designs considered"
   }
 }

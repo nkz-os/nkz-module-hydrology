@@ -185,6 +185,26 @@ export interface TwiOverlayResponse {
   status: 'ok' | 'not_generated' | string;
 }
 
+export interface ScenarioKpi {
+  water_captured_m3: number;
+  runoff_avoided_m3: number;
+  sediment_retained_t: number;
+  earthwork_m3: number;
+  investment_eur: number;
+  water_autonomy_pct: number;
+  reliability_pct: number;
+}
+
+export interface ScenarioComparison {
+  status?: 'ok' | 'no_data' | string;
+  baseline?: ScenarioKpi;
+  intervention?: ScenarioKpi;
+  comparison?: Array<{ name: string } & ScenarioKpi>;
+  designsConsidered?: number;
+  capturedM3?: number;
+  assumptions?: string;
+}
+
 export const api = {
   // DEM analysis (async job)
   analyzeParcel: (parcelId: string) =>
@@ -197,6 +217,10 @@ export const api = {
   // Parcel summary (latest AgriParcelRecord surfaced as flat KPIs)
   getSummary: (parcelId: string) =>
     get<ParcelSummary>(`/parcels/${encodeURIComponent(parcelId)}/summary`),
+
+  // Scenario comparison (baseline vs intervention, on-demand from latest record + designs)
+  getScenarios: (parcelId: string) =>
+    get<ScenarioComparison>(`/parcels/${encodeURIComponent(parcelId)}/scenarios`),
 
   // Visualization overlays (JSON through the same-origin gateway)
   getTwiOverlay: (parcelId: string) =>
