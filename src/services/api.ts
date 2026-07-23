@@ -201,8 +201,6 @@ export const api = {
     get<TwiOverlayResponse>(`/visualization/${encodeURIComponent(parcelId)}/overlay/twi`),
   getFlows: (parcelId: string) =>
     get<GeoJSON.FeatureCollection>(`/visualization/${encodeURIComponent(parcelId)}/flows`),
-  checkFlows: (parcelId: string) =>
-    get<{ exists: boolean }>(`/visualization/${encodeURIComponent(parcelId)}/flows/check`),
 
   // Design generation
   generateKeyline: (req: KeylineRequest) => post<KeylineResponse>('/design/keyline/generate', req),
@@ -214,7 +212,6 @@ export const api = {
   listDesigns: (parcelId: string) =>
     get<DesignEntity[]>(`/design?parcel_id=${encodeURIComponent(parcelId)}`),
   saveDesign: (req: DesignSaveRequest) => post<{ id: string; status: string }>('/design', req),
-  getDesign: (id: string) => get<DesignEntity>(`/design/${encodeURIComponent(id)}`),
   updateDesign: (id: string, req: DesignSaveRequest) => put(`/design/${encodeURIComponent(id)}`, req),
   deleteDesign: (id: string) => del(`/design/${encodeURIComponent(id)}`),
 

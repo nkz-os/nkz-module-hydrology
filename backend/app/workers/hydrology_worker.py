@@ -359,13 +359,11 @@ def _is_flat(arr: np.ndarray) -> bool:
 
 
 def _upload_results(parcel_id: str, tenant_id: str, result: dict) -> None:
-    """Upload PMTiles + rasters + GeoJSON to MinIO (tenant-scoped)."""
-    try:
-        tile_service.generate_twi_pmtiles(
-            parcel_id, tenant_id, result["twi.tif"],
-        )
-    except Exception:
-        logger.exception("PMTiles upload failed")
+    """Upload rasters + GeoJSON to MinIO (tenant-scoped).
+
+    TWI visualization uses the PNG ground-overlay (overlay.py), not PMTiles —
+    PMTiles generation was removed (compute with no consumer).
+    """
     try:
         _put_geojson(parcel_id, tenant_id, result["streams.geojson"])
     except Exception:

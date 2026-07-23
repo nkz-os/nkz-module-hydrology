@@ -53,8 +53,6 @@ def test_run_dem_pipeline_uploads_and_publishes():
         DEMC.return_value.fetch_dem.return_value = MagicMock()
         rp.publish_hydrology_record = AsyncMock()
         rp.publish_hydrology_zones = AsyncMock()
-        ts.generate_twi_pmtiles = MagicMock(return_value="http://m/twi.pmtiles")
-
         occ_mock = MagicMock()
         occ_mock.get_soil_context.return_value = _default_soil()
         occ_mock.get_ndvi_mean.return_value = (0.4, "default")
@@ -65,7 +63,6 @@ def test_run_dem_pipeline_uploads_and_publishes():
     assert result["status"] == "done"
     assert rp.publish_hydrology_record.await_count == 1
     assert rp.publish_hydrology_zones.await_count == 1
-    assert ts.generate_twi_pmtiles.called
 
 
 def test_run_dem_pipeline_flat_dem_degrades():
@@ -93,8 +90,6 @@ def test_run_dem_pipeline_flat_dem_degrades():
         DEMC.return_value.fetch_dem.return_value = MagicMock()
         rp.publish_hydrology_record = AsyncMock()
         rp.publish_hydrology_zones = AsyncMock()
-        ts.generate_twi_pmtiles = MagicMock(return_value=None)
-
         occ_mock = MagicMock()
         occ_mock.get_soil_context.return_value = _default_soil()
         occ_mock.get_ndvi_mean.return_value = (0.4, "default")

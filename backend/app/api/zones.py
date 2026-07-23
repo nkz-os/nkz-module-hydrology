@@ -142,18 +142,4 @@ def get_parcel_summary(
     }
 
 
-@router.get("/{parcel_id}/pmtiles-url")
-def get_pmtiles_url(
-    parcel_id: str,
-    auth: AuthContext = require_auth(),
-) -> dict:
-    """Get a presigned MinIO GET URL for the TWI PMTiles of this parcel.
 
-    The bucket is private; returns ``url: null`` + ``status: not_generated`` when
-    the object does not exist yet, never a guessed (403-ing) URL.
-    """
-    from app.services.tile_service import twi_pmtiles_key, get_public_url, pmtiles_exists
-    key = twi_pmtiles_key(parcel_id, auth.tenant_id)
-    if not pmtiles_exists(parcel_id, auth.tenant_id, "twi"):
-        return {"url": None, "key": key, "status": "not_generated"}
-    return {"url": get_public_url(key), "key": key}

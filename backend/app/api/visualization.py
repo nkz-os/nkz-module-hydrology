@@ -19,28 +19,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/visualization", tags=["Visualization"])
 
 
-@router.get("/{parcel_id}/tiles/twi")
-async def get_twi_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
-    """Get TWI PMTiles URL for a parcel."""
-    from app.services.tile_service import get_pmtiles_url
-
-    url = get_pmtiles_url(parcel_id, ctx.tenant_id, "twi")
-    if url:
-        return {"pmtiles_url": url}
-    return {"pmtiles_url": None, "status": "not_generated"}
-
-
-@router.get("/{parcel_id}/tiles/risk")
-async def get_risk_tiles(parcel_id: str, ctx: AuthContext = require_auth()):
-    """Get risk overlay PMTiles URL for a parcel."""
-    from app.services.tile_service import get_pmtiles_url
-
-    url = get_pmtiles_url(parcel_id, ctx.tenant_id, "risk")
-    if url:
-        return {"pmtiles_url": url}
-    return {"pmtiles_url": None, "status": "not_generated"}
-
-
 @router.get("/{parcel_id}/overlay/twi")
 async def get_twi_overlay(parcel_id: str, ctx: AuthContext = require_auth()):
     """Get the TWI ground-overlay PNG (presigned URL) + WGS84 bounds.
@@ -67,14 +45,6 @@ async def get_flows(parcel_id: str, ctx: AuthContext = require_auth()):
     if not geojson:
         raise HTTPException(status_code=404, detail="No flow data — run DEM pipeline first")
     return json.loads(geojson.decode("utf-8"))
-
-
-@router.get("/{parcel_id}/flows/check")
-async def check_flows_exist(parcel_id: str, ctx: AuthContext = require_auth()):
-    """Check whether flow-line data exists for a parcel."""
-    from app.services.tile_service import get_flow_lines_geojson
-
-    return {"exists": get_flow_lines_geojson(parcel_id, ctx.tenant_id) is not None}
 
 
 @router.get("/{parcel_id}/kpis")

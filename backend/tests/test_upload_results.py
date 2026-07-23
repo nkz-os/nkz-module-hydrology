@@ -43,8 +43,7 @@ def test_upload_results_persists_streams_geojson():
     assert expected_key == "hydrology/tenant1/p1/streams.geojson"
 
     s3 = MagicMock()
-    with patch("app.services.s3.get_s3_client", return_value=s3), \
-         patch("app.workers.hydrology_worker.tile_service.generate_twi_pmtiles"):
+    with patch("app.services.s3.get_s3_client", return_value=s3):
         _upload_results(PARCEL, TENANT, _result())
 
     geojson_calls = [
