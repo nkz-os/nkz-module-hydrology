@@ -14,6 +14,7 @@ from app.api.visualization import router as visualization_router
 from app.api.designs import router as designs_router
 from app.api.zones import router as zones_router
 from app.api.scenarios import router as scenarios_router
+from app.api.alerts import router as alerts_router
 from app.api.webhooks import router as webhooks_router
 
 
@@ -31,4 +32,5 @@ router.include_router(visualization_router)
 router.include_router(designs_router)
 router.include_router(zones_router)
 router.include_router(scenarios_router)
+router.include_router(alerts_router)
 router.include_router(webhooks_router)
