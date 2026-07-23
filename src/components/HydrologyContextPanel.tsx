@@ -10,12 +10,14 @@ import SwaleDesigner from './SwaleDesigner';
 import CheckDamTool from './CheckDamTool';
 import DesignManager from './DesignManager';
 import ScenarioPanel from './ScenarioPanel';
+import AlertPanel from './AlertPanel';
 
-type TabId = 'kpis' | 'scenarios' | 'keyline' | 'pond' | 'swale' | 'dam' | 'designs';
+type TabId = 'kpis' | 'scenarios' | 'alerts' | 'keyline' | 'pond' | 'swale' | 'dam' | 'designs';
 
 const TABS: { id: TabId; labelKey: string }[] = [
   { id: 'kpis', labelKey: 'hydrology:zonalKpis' },
   { id: 'scenarios', labelKey: 'hydrology:scenarios' },
+  { id: 'alerts', labelKey: 'hydrology:alerts' },
   { id: 'keyline', labelKey: 'hydrology:keylineDesigner' },
   { id: 'pond', labelKey: 'hydrology:pondSiting' },
   { id: 'swale', labelKey: 'hydrology:swaleDesigner' },
@@ -132,6 +134,7 @@ const HydrologyContextPanel: React.FC = () => {
         </>
       )}
       {activeTab === 'scenarios' && <ScenarioPanel parcelId={parcelId} refreshKey={refreshKey} />}
+      {activeTab === 'alerts' && <AlertPanel parcelId={parcelId} refreshKey={refreshKey} />}
       {activeTab === 'keyline' && <KeylineDesigner parcelId={parcelId} />}
       {activeTab === 'pond' && <PondSitingTool parcelId={parcelId} />}
       {activeTab === 'swale' && <SwaleDesigner parcelId={parcelId} />}

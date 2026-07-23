@@ -91,6 +91,22 @@
     "scenarioEarthwork": "Earthwork (m³)",
     "scenarioInvestment": "Investment (€)",
     "scenarioAutonomy": "Water autonomy (%)",
-    "scenarioDesigns": "{{count}} designs considered"
+    "scenarioDesigns": "{{count}} designs considered",
+    "basin": "Basin",
+    "breach_low": "Low risk",
+    "breach_medium": "Medium risk",
+    "breach_high": "High risk",
+    "permitRequired": "Permit required",
+    "noPermitRequired": "No permit needed",
+    "complianceDetail": "Volume {{volume}} m³ · threshold {{threshold}} m³",
+    "alerts": "Alerts",
+    "alertNoData": "Run DEM analysis to see alerts",
+    "noAlerts": "No active alerts",
+    "severity_critical": "Critical",
+    "severity_warning": "Warning",
+    "severity_info": "Info",
+    "mechanism_saturationExcess": "Saturation (Dunne)",
+    "mechanism_infiltrationExcess": "Infiltration (Horton)",
+    "alertInputs": "Saturation {{sat}}% · Rain {{precip}}mm"
   }
 }

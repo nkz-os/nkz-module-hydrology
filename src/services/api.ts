@@ -119,12 +119,29 @@ export interface PondScoreRequest {
   center: number[];
   radius: number;
   depth: number;
+  basin?: string;
+}
+
+export interface PondCompliance {
+  basin: string;
+  volumeM3: number;
+  requiresPermit: boolean;
+  permitThresholdM3: number;
+  localSlopePct: number;
+  breachRisk: 'low' | 'medium' | 'high' | string;
+  downstreamExposure: {
+    hasExposure: boolean;
+    affectedBuildings: number;
+    affectedRoads: number;
+    affectedStreams: number;
+  };
 }
 
 export interface PondScoreResponse {
   pondScore: number;
   isViable: boolean;
   factors: Record<string, number>;
+  compliance?: PondCompliance;
   request: PondScoreRequest;
   status: string;
 }
@@ -205,6 +222,18 @@ export interface ScenarioComparison {
   assumptions?: string;
 }
 
+export interface HydroAlert {
+  severity: 'info' | 'warning' | 'critical' | string;
+  mechanism: 'saturationExcess' | 'infiltrationExcess' | string;
+  description: string;
+}
+
+export interface AlertResult {
+  status?: 'ok' | 'no_data' | string;
+  alerts?: HydroAlert[];
+  inputs?: { soilSaturationPct: number; precipitationMm: number; slopeMean: number; ndvi: number };
+}
+
 export const api = {
   // DEM analysis (async job)
   analyzeParcel: (parcelId: string) =>
@@ -221,6 +250,10 @@ export const api = {
   // Scenario comparison (baseline vs intervention, on-demand from latest record + designs)
   getScenarios: (parcelId: string) =>
     get<ScenarioComparison>(`/parcels/${encodeURIComponent(parcelId)}/scenarios`),
+
+  // Hydrologic alerts (reactive, on-demand from latest record)
+  getAlerts: (parcelId: string) =>
+    get<AlertResult>(`/parcels/${encodeURIComponent(parcelId)}/alerts`),
 
   // Visualization overlays (JSON through the same-origin gateway)
   getTwiOverlay: (parcelId: string) =>

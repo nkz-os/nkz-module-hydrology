@@ -91,6 +91,22 @@
     "scenarioEarthwork": "Movimiento de tierras (m³)",
     "scenarioInvestment": "Inversión (€)",
     "scenarioAutonomy": "Autonomía hídrica (%)",
-    "scenarioDesigns": "{{count}} diseños considerados"
+    "scenarioDesigns": "{{count}} diseños considerados",
+    "basin": "Cuenca",
+    "breach_low": "Riesgo bajo",
+    "breach_medium": "Riesgo medio",
+    "breach_high": "Riesgo alto",
+    "permitRequired": "Requiere permiso",
+    "noPermitRequired": "Sin permiso",
+    "complianceDetail": "Volumen {{volume}} m³ · umbral {{threshold}} m³",
+    "alerts": "Alertas",
+    "alertNoData": "Ejecuta el análisis DEM para ver alertas",
+    "noAlerts": "Sin alertas activas",
+    "severity_critical": "Crítica",
+    "severity_warning": "Aviso",
+    "severity_info": "Info",
+    "mechanism_saturationExcess": "Saturación (Dunne)",
+    "mechanism_infiltrationExcess": "Infiltración (Horton)",
+    "alertInputs": "Saturación {{sat}}% · Lluvia {{precip}}mm"
   }
 }

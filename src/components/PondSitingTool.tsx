@@ -8,6 +8,12 @@ import ExportMenu from './ExportMenu';
 
 interface Props { parcelId: string; }
 
+// Basin authority codes (compliance permit thresholds). Proper nouns — no i18n.
+const BASINS = [
+  'default', 'CH_Ebro', 'CH_Duero', 'CH_Tajo', 'CH_Guadiana',
+  'CH_Guadalquivir', 'CH_Segura', 'CH_Jucar', 'CH_Minho_Sil', 'CH_Cantabrico',
+];
+
 const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
   const { t } = useTranslation();
   const { cesiumViewer } = useViewer();
@@ -20,6 +26,7 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
   const [label, setLabel] = useState('');
   const [savedId, setSavedId] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
+  const [basin, setBasin] = useState('default');
   const drawingRef = useRef<DrawingManager | null>(null);
 
   // Cancel any in-progress map drawing when the tool unmounts.
@@ -46,7 +53,7 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
     setSavedId(undefined);
     try {
       const res = await api.scorePond({
-        parcel_id: parcelId, center, radius, depth,
+        parcel_id: parcelId, center, radius, depth, basin,
       });
       setResult(res);
 
@@ -130,6 +137,13 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
         <input type="number" value={depth} onChange={(e) => setDepth(Number(e.target.value))}
                className="w-full border rounded px-2 py-1 text-sm" />
       </div>
+      <div>
+        <label className="text-xs text-nkz-muted">{t('hydrology:basin')}</label>
+        <select value={basin} onChange={(e) => setBasin(e.target.value)}
+                className="w-full border rounded px-2 py-1 text-sm">
+          {BASINS.map((b) => <option key={b} value={b}>{b}</option>)}
+        </select>
+      </div>
       <button onClick={score} disabled={loading || !center}
               className="bg-nkz-accent text-white px-3 py-1 rounded text-sm w-full disabled:opacity-60">
         {loading ? t('hydrology:loading') : t('hydrology:pondViability')}
@@ -140,6 +154,28 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
           <p className={result.isViable ? 'text-green-600' : 'text-red-500'}>
             {result.isViable ? t('hydrology:viable') : t('hydrology:notViable')}
           </p>
+          {result.compliance && (
+            <div className="mt-1 p-2 border border-nkz-border rounded">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                  result.compliance.breachRisk === 'high' ? 'bg-red-500/15 text-red-500' :
+                  result.compliance.breachRisk === 'medium' ? 'bg-amber-500/15 text-amber-500' :
+                  'bg-green-500/15 text-green-500'
+                }`}>
+                  {t(`hydrology:breach_${result.compliance.breachRisk}`)}
+                </span>
+                <span className={result.compliance.requiresPermit ? 'text-red-500' : 'text-green-600'}>
+                  {result.compliance.requiresPermit ? t('hydrology:permitRequired') : t('hydrology:noPermitRequired')}
+                </span>
+              </div>
+              <p className="text-[10px] text-nkz-muted mt-1">
+                {t('hydrology:complianceDetail', {
+                  volume: result.compliance.volumeM3,
+                  threshold: result.compliance.permitThresholdM3,
+                })}
+              </p>
+            </div>
+          )}
           <div className="flex gap-1 pt-1">
             <input
               type="text"
