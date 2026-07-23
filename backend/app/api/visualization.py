@@ -1,20 +1,18 @@
 """
-NKZ Water Studio — Visualization Router
+NKZ Water Studio — Visualization Router.
 
-Endpoints for tile URLs, flow lines, and raster-derived visualization assets.
-Lazy-imports tile_service to avoid boto3 dependency at import time.
+TWI ground-overlay (presigned PNG + WGS84 bounds) and the stream-network
+GeoJSON. Scenario comparison lives at ``/parcels/{id}/scenarios``
+(``scenario_compute``) — the old ``/visualization/{id}/kpis`` S3-read dead-end
+was removed in Phase 1.2. Lazy-imports tile_service to keep boto3 out of import
+time.
 """
-
 import json
-import logging
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException
 
-from app.config import get_settings
 from app.middleware import require_auth
 from nkz_platform_sdk import AuthContext
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/visualization", tags=["Visualization"])
 
@@ -45,21 +43,3 @@ async def get_flows(parcel_id: str, ctx: AuthContext = require_auth()):
     if not geojson:
         raise HTTPException(status_code=404, detail="No flow data — run DEM pipeline first")
     return json.loads(geojson.decode("utf-8"))
-
-
-@router.get("/{parcel_id}/kpis")
-async def get_kpis(parcel_id: str, ctx: AuthContext = require_auth()):
-    """Get scenario KPIs for a parcel."""
-    from app.services.s3 import get_s3_client
-
-    settings = get_settings()
-    s3 = get_s3_client()
-    try:
-        resp = s3.get_object(
-            Bucket=settings.minio_bucket,
-            Key=f"scenarios/{parcel_id}/kpis.json",
-        )
-        return json.loads(resp["Body"].read().decode("utf-8"))
-    except Exception as exc:
-        logger.warning("KPIs unavailable for %s: %s", parcel_id, exc)
-        return {"baseline": {}, "intervention": {}}

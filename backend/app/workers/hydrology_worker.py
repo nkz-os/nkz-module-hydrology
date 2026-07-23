@@ -127,6 +127,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     # cleanly (never null).
     observed_at = datetime.now(timezone.utc).isoformat()
     metrics = _compute_metrics(result)
+    metrics["parcelAreaHa"] = round(area_ha, 4)
     if weather:
         _merge_weather_metrics(metrics, weather)
 

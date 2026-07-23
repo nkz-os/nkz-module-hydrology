@@ -24,6 +24,7 @@ _RECORD_METRICS: dict[str, str] = {
     "streamLengthM": "nkz:streamLengthM",
     "watershedAreaHa": "nkz:watershedAreaHa",
     "slopeMean": "nkz:slopeMean",
+    "parcelAreaHa": "nkz:parcelAreaHa",
     # Weather KPIs (from weather-map, Ronda 2.3)
     "etoMm": "nkz:etoMm",
     "precipitationMm": "nkz:precipitationMm",
