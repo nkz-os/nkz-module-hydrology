@@ -1,12 +1,15 @@
 """
 NKZ Water Studio — Tile Service
 
-PMTiles generation (TWI, risk rasters) and flow line retrieval from MinIO.
-Uses geolibre-wasm write_pmtiles for conversion.
+Flow-line retrieval from MinIO + presigned URL helper.
+
+TWI visualization uses the PNG ground-overlay (see overlay.py), NOT PMTiles.
+PMTiles generation was removed: it had no consumer (the viewer renders the PNG
+overlay) and cost CPU + storage on every pipeline run. Reintroduce only if a
+multi-parcel tile pyramid (Fase 4 — Water Story) actually needs it.
 
 All MinIO object keys are tenant-scoped (hermeticity): hydrology/{tenant}/{parcel}/...
 """
-import json
 import logging
 from typing import Optional
 
@@ -31,101 +34,9 @@ def parcel_short(parcel_id: str) -> str:
 _parcel_short = parcel_short
 
 
-def _pmtiles_key(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> str:
-    """MinIO object key for a PMTiles file (tenant-scoped)."""
-    return f"hydrology/{tenant_id}/{_parcel_short(parcel_id)}/{raster_name}.pmtiles"
-
-
 def stream_network_key(parcel_id: str, tenant_id: str) -> str:
     """MinIO object key for a stream network GeoJSON file (tenant-scoped)."""
     return f"hydrology/{tenant_id}/{_parcel_short(parcel_id)}/streams.geojson"
-
-
-# ── PMTiles generation ────────────────────────────────────────────────
-
-def generate_pmtiles(
-    parcel_id: str,
-    raster_data: bytes,
-    tenant_id: str,
-    raster_name: str = "twi",
-    min_zoom: int = 10,
-    max_zoom: int = 18,
-    colormap: str = "viridis",
-) -> str:
-    """Convert a single-band raster to PMTiles via geolibre-wasm and upload to MinIO.
-
-    Args:
-        parcel_id: Parcel identifier used in the MinIO key.
-        raster_data: Raw GeoTIFF bytes of the raster to convert.
-        tenant_id: Tenant owner of the outputs (tenant-scoped keys).
-        raster_name: Logical name (e.g. ``"twi"``, ``"risk"``).
-        min_zoom: Minimum zoom level for the PMTiles pyramid.
-        max_zoom: Maximum zoom level.
-        colormap: Matplotlib colormap name applied during conversion.
-
-    Returns:
-        MinIO object key of the uploaded PMTiles file (worker/log use only — the
-        bucket is private, so this is a key, not a fetchable URL).
-
-    Raises:
-        RuntimeError: If the geolibre tool fails or produces no output.
-    """
-    output_name = f"{raster_name}.pmtiles"
-
-    from app.services.geolibre_engine import GeoLibreEngine
-    engine = GeoLibreEngine()
-    pmtiles = engine.write_pmtiles(raster_data, colormap=colormap,
-                                    min_zoom=min_zoom, max_zoom=max_zoom)
-
-    # Upload to MinIO
-    key = _pmtiles_key(parcel_id, tenant_id, raster_name)
-    s3 = _s3_client()
-    s3.put_object(
-        Bucket=get_settings().minio_bucket,
-        Key=key,
-        Body=pmtiles,
-        ContentType="application/vnd.pmtiles",
-    )
-
-    logger.info(
-        "PMTiles %s for parcel %s: %s (%d bytes)",
-        raster_name, parcel_id, key, len(pmtiles),
-    )
-    return key
-
-
-def generate_twi_pmtiles(
-    parcel_id: str,
-    tenant_id: str,
-    twi_raster: bytes,
-    min_zoom: int = 10,
-    max_zoom: int = 18,
-) -> str:
-    """Convenience wrapper to generate TWI PMTiles with viridis colormap."""
-    return generate_pmtiles(
-        parcel_id, twi_raster, tenant_id,
-        raster_name="twi",
-        min_zoom=min_zoom,
-        max_zoom=max_zoom,
-        colormap="viridis",
-    )
-
-
-def generate_risk_pmtiles(
-    parcel_id: str,
-    tenant_id: str,
-    risk_raster: bytes,
-    min_zoom: int = 10,
-    max_zoom: int = 18,
-) -> str:
-    """Generate risk-overlay PMTiles with a red-yellow colormap."""
-    return generate_pmtiles(
-        parcel_id, risk_raster, tenant_id,
-        raster_name="risk",
-        min_zoom=min_zoom,
-        max_zoom=max_zoom,
-        colormap="Reds",
-    )
 
 
 # ── Flow lines retrieval ──────────────────────────────────────────────
@@ -152,22 +63,6 @@ def get_flow_lines_geojson(parcel_id: str, tenant_id: str) -> Optional[bytes]:
         return None
 
 
-def pmtiles_exists(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> bool:
-    """Check whether a PMTiles file already exists in MinIO."""
-    s3 = _s3_client()
-    settings = get_settings()
-    try:
-        s3.head_object(Bucket=settings.minio_bucket, Key=_pmtiles_key(parcel_id, tenant_id, raster_name))
-        return True
-    except Exception:
-        return False
-
-
-def twi_pmtiles_key(parcel_id: str, tenant_id: str) -> str:
-    """Public API alias for _pmtiles_key (tenant-scoped TWI PMTiles key)."""
-    return _pmtiles_key(parcel_id, tenant_id, "twi")
-
-
 def _presign_get(key: str) -> str:
     """Presigned S3v4 GET URL for an object key, signed against the public host."""
     from app.services.s3 import get_presign_client
@@ -187,13 +82,3 @@ def get_public_url(key: str) -> str:
     signed against the public MinIO host so a browser can fetch it directly.
     """
     return _presign_get(key)
-
-
-def get_pmtiles_url(parcel_id: str, tenant_id: str, raster_name: str = "twi") -> Optional[str]:
-    """Get a presigned GET URL for an existing PMTiles file.
-
-    Returns ``None`` if the file does not exist in MinIO.
-    """
-    if not pmtiles_exists(parcel_id, tenant_id, raster_name):
-        return None
-    return _presign_get(_pmtiles_key(parcel_id, tenant_id, raster_name))

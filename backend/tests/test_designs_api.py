@@ -325,3 +325,38 @@ def test_create_design_500_hides_exception_text():
     assert exc.value.status_code == 500
     assert exc.value.detail == "Internal error"
     assert secret not in str(exc.value.detail)
+
+
+def test_score_pond_returns_compliance_block():
+    """score_pond must surface a CHX compliance block (Phase 2.1)."""
+    import io as _io
+    import numpy as np
+    import rasterio
+    from app.api import designs
+
+    # Flat DEM (slope 0 -> breach risk driven only by volume).
+    z = np.full((20, 20), 100.0, dtype="float32")
+    buf = _io.BytesIO()
+    with rasterio.open(
+        buf, "w", driver="GTiff", height=20, width=20, count=1, dtype="float32",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(-1.645, 42.822, 0.001, 0.001),
+    ) as dst:
+        dst.write(z, 1)
+
+    with patch.object(designs, "download_raster", return_value=buf.getvalue()):
+        resp = designs.score_pond(
+            req=designs.PondScoreRequest(
+                parcel_id="urn:ngsi-ld:AgriParcel:p1",
+                center=[-1.635, 42.812], radius=30.0, depth=2.0, basin="CH_Segura",
+            ),
+            auth=SimpleNamespace(tenant_id="t1"),
+        )
+    assert resp["status"] == "ok"
+    comp = resp["compliance"]
+    assert comp["basin"] == "CH_Segura"
+    assert comp["permitThresholdM3"] == 3000  # CH_Segura threshold
+    # volume = pi*30^2*0.1 ~= 282.7 m³ < 3000 -> no permit, low breach risk.
+    assert comp["requiresPermit"] is False
+    assert comp["breachRisk"] == "low"
+    assert comp["downstreamExposure"]["hasExposure"] is False

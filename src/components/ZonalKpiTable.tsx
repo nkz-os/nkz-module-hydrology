@@ -41,6 +41,7 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunni
         <tr className="text-nkz-muted">
           <th className="text-left">{t('hydrology:zone')}</th>
           <th className="text-right">{t('hydrology:runoff')}</th>
+          <th className="text-right">{t('hydrology:peakFlow')}</th>
           <th className="text-right">{t('hydrology:sediment')}</th>
           <th className="text-right">{t('hydrology:saturation')}</th>
           <th className="text-right">{t('hydrology:pondViability')}</th>
@@ -51,6 +52,7 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunni
           <tr key={z.id} className="border-t border-nkz-border">
             <td>{z.zoneId}</td>
             <td className="text-right">{z.runoffMm?.toFixed(1) ?? '-'}</td>
+            <td className="text-right">{z.peakFlowM3s?.toFixed(2) ?? '-'}</td>
             <td className="text-right">{z.sedimentYieldTonnes?.toFixed(2) ?? '-'}</td>
             <td className="text-right">{z.soilSaturationPct?.toFixed(0) ?? '-'}%</td>
             <td className="text-right">{z.pondViability?.toFixed(2) ?? '-'}</td>

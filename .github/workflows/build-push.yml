@@ -67,41 +67,6 @@ jobs:
               run: cd backend && python -m pytest tests/ -v
 
     # ==========================================================================
-    # Build IIFE bundle
-    # ==========================================================================
-    build-module:
-        name: Build IIFE Bundle
-        runs-on: ubuntu-latest
-        needs: test
-        # Enabled after placeholder replacement
-        if: true
-        steps:
-            - uses: actions/checkout@v4
-
-            - name: Set up Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: "22"
-
-            - name: Install pnpm
-              uses: pnpm/action-setup@v4
-
-            - name: Install dependencies
-              run: pnpm install --frozen-lockfile
-
-            - name: Build module bundle
-              run: pnpm run build:module
-              env:
-                NKZ_VERSION_HASH: ${{ github.sha }}
-
-            - name: Upload bundle artifact
-              uses: actions/upload-artifact@v4
-              with:
-                  name: nkz-module
-                  path: dist/nkz-module.js
-                  retention-days: 30
-
-    # ==========================================================================
     # Build and push backend Docker image
     # ==========================================================================
     build-backend:
@@ -136,7 +101,7 @@ jobs:
                       type=ref,event=branch
                       type=semver,pattern={{version}}
                       type=semver,pattern={{major}}.{{minor}}
-                      type=sha,prefix=
+                      type=sha,prefix=,format=long
 
             - name: Build and push Backend image
               uses: docker/build-push-action@v5

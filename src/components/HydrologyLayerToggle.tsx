@@ -14,10 +14,12 @@ const HydrologyLayerToggle: React.FC = () => {
     twiOpacity,
     twiStatus,
     flowsVisible,
+    zonesVisible,
     designsVisible,
     setTwiVisible,
     setTwiOpacity,
     setFlowsVisible,
+    setZonesVisible,
     setDesignsVisible,
   } = useHydrologyLayerContext();
 
@@ -68,6 +70,18 @@ const HydrologyLayerToggle: React.FC = () => {
         />
         <span className={flowsVisible ? 'text-nkz-text' : 'text-nkz-muted'}>
           {t('hydrology:layerFlows')}
+        </span>
+      </label>
+
+      <label className={rowClass}>
+        <input
+          type="checkbox"
+          checked={zonesVisible}
+          onChange={(e) => setZonesVisible(e.target.checked)}
+          className="w-3.5 h-3.5"
+        />
+        <span className={zonesVisible ? 'text-nkz-text' : 'text-nkz-muted'}>
+          {t('hydrology:layerZones')}
         </span>
       </label>
 

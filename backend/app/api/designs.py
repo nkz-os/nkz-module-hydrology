@@ -29,6 +29,7 @@ from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
 from app.services.keyline import detect_keyline
 from app.services.pond_score import pond_score
 from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
+from app.services.compliance import requires_water_permit, breach_risk_class, PERMIT_THRESHOLDS_M3
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,11 @@ class PondScoreRequest(BaseModel):
     center: list[float]
     radius: float = 30.0
     depth: float = 2.0
+    # Basin authority code (CH_Ebro, CH_Segura, ...) for the permit-threshold
+    # compliance check. Auto-detection from coordinates needs a CHX polygon
+    # layer (not bundled) — the caller selects it; "default" applies the
+    # 5000 m³/year rule.
+    basin: str = "default"
 
 
 class SwaleSuggestRequest(BaseModel):
@@ -147,10 +153,35 @@ def score_pond(
         ksat_mmh=15.0,
     )
 
+    # Compliance (Phase 2.1): CHX water-permit threshold + breach risk.
+    # ASSUMPTION: downstream exposure defaults to False — no infrastructure
+    # (buildings/roads) layer is bundled; basin auto-detection needs a CHX
+    # polygon asset (deferred). breachRisk still reflects volume + local slope.
+    slope_pct = _local_slope_pct(dem_arr, row, col, transform)
+    volume_m3 = catchment_yield_m3
+    requires_permit = requires_water_permit(volume_m3, req.basin)
+    permit_threshold = PERMIT_THRESHOLDS_M3.get(req.basin, PERMIT_THRESHOLDS_M3["default"])
+    breach = breach_risk_class(volume_m3, slope_pct, has_downstream_exposure=False)
+    compliance = {
+        "basin": req.basin,
+        "volumeM3": round(volume_m3, 1),
+        "requiresPermit": requires_permit,
+        "permitThresholdM3": permit_threshold,
+        "localSlopePct": round(slope_pct, 1),
+        "breachRisk": breach,
+        "downstreamExposure": {
+            "hasExposure": False,
+            "affectedBuildings": 0,
+            "affectedRoads": 0,
+            "affectedStreams": 0,
+        },
+    }
+
     return {
         "pondScore": ps["pondScore"],
         "isViable": ps["isViable"],
         "factors": ps["factors"],
+        "compliance": compliance,
         "request": req.model_dump(),
         "status": "ok",
     }
@@ -282,6 +313,17 @@ def _read_dem(dem_bytes: bytes) -> tuple:
     with io.BytesIO(dem_bytes) as f:
         with rasterio.open(f) as ds:
             return ds.read(1), ds.transform, ds.crs
+
+
+def _local_slope_pct(arr, row, col, transform) -> float:
+    """Local terrain slope (%) at a pixel via 3x3 finite difference (UTM metres)."""
+    ny, nx = arr.shape
+    if not (1 <= row < ny - 1 and 1 <= col < nx - 1):
+        return 0.0
+    pixel_m = abs(transform.a) or 1.0
+    dzdx = (float(arr[row, col + 1]) - float(arr[row, col - 1])) / (2.0 * pixel_m)
+    dzdy = (float(arr[row + 1, col]) - float(arr[row - 1, col])) / (2.0 * pixel_m)
+    return math.hypot(dzdx, dzdy) * 100.0
 
 
 def _to_wgs84(coords, src_crs):
@@ -467,6 +509,8 @@ def update_design(
         # inject_fiware_headers only adds Link when the CONTEXT_URL env var is
         # set; hydrology prod does not set it, so guarantee the platform-context
         # Link ourselves or Orion silently drops every nkz:* attr (spec §6.2).
+        # TODO(phase1.5): once CONTEXT_URL is set in the hydrology deployment env
+        # (gitops overlay), migrate to `await OrionClient(tenant).update_entity_attrs(id, attrs)` and drop this httpx.patch + manual Link.
         headers = inject_fiware_headers({}, auth.tenant_id, has_context_in_body=False)
         headers.setdefault(
             "Link",

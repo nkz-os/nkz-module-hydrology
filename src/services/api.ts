@@ -57,10 +57,12 @@ export interface ZoneKpi {
   twiRange: string;
   areaHa: number;
   runoffMm?: number;
+  peakFlowM3s?: number;
   sedimentYieldTonnes?: number;
   soilSaturationPct?: number;
   pondViability?: number;
   keylineGrade?: number;
+  geometry?: GeoJSON.Geometry | null;
 }
 
 export type DataFidelity = 'ign_5m' | 'ign_25m' | 'degraded_flat' | 'unavailable' | string;
@@ -117,12 +119,29 @@ export interface PondScoreRequest {
   center: number[];
   radius: number;
   depth: number;
+  basin?: string;
+}
+
+export interface PondCompliance {
+  basin: string;
+  volumeM3: number;
+  requiresPermit: boolean;
+  permitThresholdM3: number;
+  localSlopePct: number;
+  breachRisk: 'low' | 'medium' | 'high' | string;
+  downstreamExposure: {
+    hasExposure: boolean;
+    affectedBuildings: number;
+    affectedRoads: number;
+    affectedStreams: number;
+  };
 }
 
 export interface PondScoreResponse {
   pondScore: number;
   isViable: boolean;
   factors: Record<string, number>;
+  compliance?: PondCompliance;
   request: PondScoreRequest;
   status: string;
 }
@@ -183,6 +202,38 @@ export interface TwiOverlayResponse {
   status: 'ok' | 'not_generated' | string;
 }
 
+export interface ScenarioKpi {
+  water_captured_m3: number;
+  runoff_avoided_m3: number;
+  sediment_retained_t: number;
+  earthwork_m3: number;
+  investment_eur: number;
+  water_autonomy_pct: number;
+  reliability_pct: number;
+}
+
+export interface ScenarioComparison {
+  status?: 'ok' | 'no_data' | string;
+  baseline?: ScenarioKpi;
+  intervention?: ScenarioKpi;
+  comparison?: Array<{ name: string } & ScenarioKpi>;
+  designsConsidered?: number;
+  capturedM3?: number;
+  assumptions?: string;
+}
+
+export interface HydroAlert {
+  severity: 'info' | 'warning' | 'critical' | string;
+  mechanism: 'saturationExcess' | 'infiltrationExcess' | string;
+  description: string;
+}
+
+export interface AlertResult {
+  status?: 'ok' | 'no_data' | string;
+  alerts?: HydroAlert[];
+  inputs?: { soilSaturationPct: number; precipitationMm: number; slopeMean: number; ndvi: number };
+}
+
 export const api = {
   // DEM analysis (async job)
   analyzeParcel: (parcelId: string) =>
@@ -196,13 +247,19 @@ export const api = {
   getSummary: (parcelId: string) =>
     get<ParcelSummary>(`/parcels/${encodeURIComponent(parcelId)}/summary`),
 
+  // Scenario comparison (baseline vs intervention, on-demand from latest record + designs)
+  getScenarios: (parcelId: string) =>
+    get<ScenarioComparison>(`/parcels/${encodeURIComponent(parcelId)}/scenarios`),
+
+  // Hydrologic alerts (reactive, on-demand from latest record)
+  getAlerts: (parcelId: string) =>
+    get<AlertResult>(`/parcels/${encodeURIComponent(parcelId)}/alerts`),
+
   // Visualization overlays (JSON through the same-origin gateway)
   getTwiOverlay: (parcelId: string) =>
     get<TwiOverlayResponse>(`/visualization/${encodeURIComponent(parcelId)}/overlay/twi`),
   getFlows: (parcelId: string) =>
     get<GeoJSON.FeatureCollection>(`/visualization/${encodeURIComponent(parcelId)}/flows`),
-  checkFlows: (parcelId: string) =>
-    get<{ exists: boolean }>(`/visualization/${encodeURIComponent(parcelId)}/flows/check`),
 
   // Design generation
   generateKeyline: (req: KeylineRequest) => post<KeylineResponse>('/design/keyline/generate', req),
@@ -214,7 +271,6 @@ export const api = {
   listDesigns: (parcelId: string) =>
     get<DesignEntity[]>(`/design?parcel_id=${encodeURIComponent(parcelId)}`),
   saveDesign: (req: DesignSaveRequest) => post<{ id: string; status: string }>('/design', req),
-  getDesign: (id: string) => get<DesignEntity>(`/design/${encodeURIComponent(id)}`),
   updateDesign: (id: string, req: DesignSaveRequest) => put(`/design/${encodeURIComponent(id)}`, req),
   deleteDesign: (id: string) => del(`/design/${encodeURIComponent(id)}`),
 

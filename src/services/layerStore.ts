@@ -22,6 +22,7 @@ export interface HydrologyLayerState {
   twiOpacity: number;
   twiStatus: TwiStatus;
   flowsVisible: boolean;
+  zonesVisible: boolean;
   designsVisible: boolean;
   designs: DesignGeometry[];
 }
@@ -31,6 +32,7 @@ let state: HydrologyLayerState = {
   twiOpacity: 0.7,
   twiStatus: 'idle',
   flowsVisible: false,
+  zonesVisible: false,
   designsVisible: false,
   designs: [],
 };
