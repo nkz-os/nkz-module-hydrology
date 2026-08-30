@@ -26,6 +26,18 @@ async def fiware_sensors(request: Request) -> Response:
     No auth (Orion posts unauthenticated pod-to-pod). Never mutates state and
     never raises: logs the tenant + entity count and returns 204. The future
     sensor-driven recompute pipeline (Ronda 2.x) will hook in here.
+
+    When that pipeline lands, read the entity the canonical way. `DeviceMeasurement`
+    inverts the shape used by entity types that carry their readings as attributes:
+
+      - the device is `refDevice.object`, NOT the last segment of the entity id
+        (that segment is the measured property name);
+      - the reading's name is the VALUE of `controlledProperty`, not an attribute key;
+      - its value is in `numValue` or `textValue`, never both;
+      - the instant is `dateObserved`, a plain Property, not per-attribute `observedAt`.
+
+    A missing `refDevice` or value means there is nothing safe to persist — skip the
+    entity rather than writing a guessed or empty device id.
     """
     tenant = request.headers.get("NGSILD-Tenant", "unknown")
     entity_count = 0
