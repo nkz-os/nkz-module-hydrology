@@ -27,6 +27,7 @@ pillow>=10.0.0  # HPND license (AGPL-compatible); TWI overlay PNG render
 # Platform SDK
 nkz-platform-sdk>=0.8.2
 minio>=7.2.0
+requests>=2.31.0  # SyncOrionClient (SDK 0.8.x) uses requests; SDK omits it
 
 # Geo / WASM
 geolibre-wasm==0.5.1  # pin: D8 tools fixed (wasm thread-spawn trap resolved in 0.5.1)
