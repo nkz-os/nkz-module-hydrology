@@ -362,10 +362,18 @@ def _merge_weather_metrics(metrics: dict, weather: ParcelWeather) -> None:
 def _read_parcel_polygon(parcel_id: str, tenant_id: str) -> tuple[dict, float]:
     """Read AgriParcel.location polygon + area_ha from Orion."""
     orion = OrionClient(tenant_id)
-    try:
-        ent = asyncio.run(orion.get_entity(parcel_id))
-    finally:
-        asyncio.run(orion.close())
+
+    async def _get():
+        try:
+            return await orion.get_entity(parcel_id)
+        finally:
+            # Close on the SAME event loop that issued the request — the
+            # httpx/httpcore anyio backend binds to the running loop, so a
+            # separate asyncio.run(orion.close()) raises "Event loop is
+            # closed".
+            await orion.close()
+
+    ent = asyncio.run(_get())
     loc = ent.get("location", {}).get("value")
     if not loc:
         raise RuntimeError(f"AgriParcel {parcel_id} has no location")
