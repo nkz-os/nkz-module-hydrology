@@ -91,10 +91,26 @@ class TestFetchDtmBytes:
     def test_reads_internal_bucket_by_asset_key(self):
         s3 = MagicMock()
         s3.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=b"TIFF"))}
-        asset = type("A", (), {"asset_id": "job-42"})()
+        asset = type("A", (), {"asset_id": "job-42", "dtm_url": ""})()
         with patch("app.services.lidar_dem.get_s3_client", return_value=s3):
             data = fetch_dtm_bytes(asset)
         assert data == b"TIFF"
         s3.get_object.assert_called_once_with(
             Bucket=LIDAR_TILESETS_BUCKET, Key="job-42/dtm.tif"
+        )
+
+    def test_derives_key_from_full_urn_dtm_url(self):
+        """Historical layers upload under the full job URN prefix — the key
+        must come from the URL, not the short asset id."""
+        s3 = MagicMock()
+        s3.get_object.return_value = {"Body": MagicMock(read=MagicMock(return_value=b"T"))}
+        asset = type("A", (), {
+            "asset_id": "7f490884-d517-4c2d-82d8-b09e1ed8611f",
+            "dtm_url": "https://minio.robotika.cloud/lidar-tilesets/urn:ngsi-ld:DataProcessingJob:7f490884-d517-4c2d-82d8-b09e1ed8611f/dtm.tif",
+        })()
+        with patch("app.services.lidar_dem.get_s3_client", return_value=s3):
+            fetch_dtm_bytes(asset)
+        s3.get_object.assert_called_once_with(
+            Bucket=LIDAR_TILESETS_BUCKET,
+            Key="urn:ngsi-ld:DataProcessingJob:7f490884-d517-4c2d-82d8-b09e1ed8611f/dtm.tif",
         )

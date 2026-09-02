@@ -37,6 +37,7 @@ class LidarAsset:
     asset_id: str
     parcel_urn: str
     date_observed: str
+    dtm_url: str
 
 
 def _prop(entity: dict, name: str):
@@ -89,13 +90,28 @@ async def find_latest_lidar_asset(
         asset_id=entity_id.split(":")[-1],
         parcel_urn=_parcel_urn(parcel_id),
         date_observed=str(_prop(latest, "dateObserved") or ""),
+        dtm_url=str(_prop(latest, "dtmUrl") or ""),
     )
+
+
+def _dtm_s3_key(asset: LidarAsset) -> str:
+    """Derive the S3 key of the DTM from the DigitalAsset dtmUrl.
+
+    The public URL is ``{minio_public_base}/{bucket}/{key}``, e.g.
+    ``https://minio.robotika.cloud/lidar-tilesets/<prefix>/dtm.tif``.  We
+    read the key out of the URL instead of assuming ``{asset_id}/dtm.tif``
+    because historical layers upload under the FULL job URN prefix
+    (``urn:ngsi-ld:DataProcessingJob:<id>/dtm.tif``) while newer ones use the
+    short id — the URL is the single source of truth.
+    """
+    if "/lidar-tilesets/" in asset.dtm_url:
+        return asset.dtm_url.split("/lidar-tilesets/", 1)[1]
+    # Fallback: no bucket in URL (should not happen) — assume short-id prefix
+    return f"{asset.asset_id}/dtm.tif"
 
 
 def fetch_dtm_bytes(asset: LidarAsset) -> bytes:
     """Read the DTM GeoTIFF from the internal MinIO endpoint."""
     s3 = get_s3_client()
-    resp = s3.get_object(
-        Bucket=LIDAR_TILESETS_BUCKET, Key=f"{asset.asset_id}/dtm.tif"
-    )
+    resp = s3.get_object(Bucket=LIDAR_TILESETS_BUCKET, Key=_dtm_s3_key(asset))
     return resp["Body"].read()
