@@ -29,6 +29,19 @@ logger = logging.getLogger(__name__)
 
 LIDAR_TILESETS_BUCKET = "lidar-tilesets"
 
+# Resample gate: native 0.5 m LiDAR DTMs are kept only for small parcels
+# (microtopography matters and the cell count stays small).  Larger parcels
+# are resampled so the geolibre-wasm breach/flow engine stays responsive.
+_LIDAR_RESAMPLE_AREA_HA = 10.0
+_LIDAR_RESAMPLE_CELLSIZE_M = 2.0
+
+
+def lidar_target_cellsize(area_ha: float) -> float | None:
+    """Target output cellsize (m) for a LiDAR DTM, or None for native 0.5 m."""
+    if area_ha >= _LIDAR_RESAMPLE_AREA_HA:
+        return _LIDAR_RESAMPLE_CELLSIZE_M
+    return None
+
 
 @dataclass
 class LidarAsset:

@@ -114,3 +114,14 @@ class TestFetchDtmBytes:
             Bucket=LIDAR_TILESETS_BUCKET,
             Key="urn:ngsi-ld:DataProcessingJob:7f490884-d517-4c2d-82d8-b09e1ed8611f/dtm.tif",
         )
+
+
+class TestLidarCellsizeGate:
+    def test_small_parcel_keeps_native(self):
+        from app.services.lidar_dem import lidar_target_cellsize
+        assert lidar_target_cellsize(3.0) is None  # native 0.5 m
+
+    def test_large_parcel_resampled_to_2m(self):
+        from app.services.lidar_dem import lidar_target_cellsize
+        assert lidar_target_cellsize(10.0) == 2.0
+        assert lidar_target_cellsize(54.0) == 2.0

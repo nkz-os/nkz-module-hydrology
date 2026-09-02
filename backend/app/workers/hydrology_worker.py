@@ -25,7 +25,7 @@ from nkz_platform_sdk import OrionClient
 
 from app.config import get_settings
 from app.services.dem_client import DEMClient, DEMGrid, DEMUnavailable, resolution_for_area_ha
-from app.services.lidar_dem import LidarAsset, fetch_dtm_bytes, find_latest_lidar_asset
+from app.services.lidar_dem import LidarAsset, fetch_dtm_bytes, find_latest_lidar_asset, lidar_target_cellsize
 from app.services.entity_publisher import build_hydrology_record, build_hydrology_zones
 from app.services.geolibre_engine import GeoLibreEngine
 from app.services.utm import reproject_grid_to_utm
@@ -43,19 +43,6 @@ from app.services.tile_service import parcel_short
 logger = logging.getLogger(__name__)
 
 _STREAM_AREA_M2 = 10_000.0  # 1 ha physical stream threshold (owner decision)
-
-# LiDAR memory gate: native 0.5 m DTMs are kept for small parcels; large
-# parcels are resampled to 2 m so breach/flow-accumulation stays sane
-# (>=50 ha at 0.5 m is ~8M cells).
-_LIDAR_RESAMPLE_AREA_HA = 50.0
-_LIDAR_RESAMPLE_CELLSIZE_M = 2.0
-
-
-def _lidar_cellsize_for_area(area_ha: float) -> float | None:
-    """Target cellsize for a LiDAR DTM, or None to keep the native 0.5 m."""
-    if area_ha >= _LIDAR_RESAMPLE_AREA_HA:
-        return _LIDAR_RESAMPLE_CELLSIZE_M
-    return None
 _DEG2M_APPROX = 111_320.0   # metres per degree (approximate, for buffer/area)
 
 
@@ -99,7 +86,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
         try:
             dtm_bytes = fetch_dtm_bytes(lidar_asset)
             centroid = shply_shape(geometry).centroid
-            cellsize = _lidar_cellsize_for_area(area_ha)
+            cellsize = lidar_target_cellsize(area_ha)
             utm_dem = reproject_grid_to_utm(
                 dtm_bytes, centroid.x, centroid.y, cellsize_m=cellsize
             )
