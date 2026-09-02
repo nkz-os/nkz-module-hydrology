@@ -25,6 +25,7 @@ from nkz_platform_sdk import OrionClient
 
 from app.config import get_settings
 from app.services.dem_client import DEMClient, DEMGrid, DEMUnavailable, resolution_for_area_ha
+from app.services.lidar_dem import LidarAsset, fetch_dtm_bytes, find_latest_lidar_asset
 from app.services.entity_publisher import build_hydrology_record, build_hydrology_zones
 from app.services.geolibre_engine import GeoLibreEngine
 from app.services.utm import reproject_grid_to_utm
@@ -42,6 +43,19 @@ from app.services.tile_service import parcel_short
 logger = logging.getLogger(__name__)
 
 _STREAM_AREA_M2 = 10_000.0  # 1 ha physical stream threshold (owner decision)
+
+# LiDAR memory gate: native 0.5 m DTMs are kept for small parcels; large
+# parcels are resampled to 2 m so breach/flow-accumulation stays sane
+# (>=50 ha at 0.5 m is ~8M cells).
+_LIDAR_RESAMPLE_AREA_HA = 50.0
+_LIDAR_RESAMPLE_CELLSIZE_M = 2.0
+
+
+def _lidar_cellsize_for_area(area_ha: float) -> float | None:
+    """Target cellsize for a LiDAR DTM, or None to keep the native 0.5 m."""
+    if area_ha >= _LIDAR_RESAMPLE_AREA_HA:
+        return _LIDAR_RESAMPLE_CELLSIZE_M
+    return None
 _DEG2M_APPROX = 111_320.0   # metres per degree (approximate, for buffer/area)
 
 
@@ -57,6 +71,10 @@ def _slope_deg_to_pct(slope_deg: float) -> float:
 def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     """RQ worker entry point: full DEM pipeline for a parcel.
 
+    DEM source priority (cross-module contract 2026-09-02):
+    1. LiDAR DTM (0.5 m) discovered via Orion DigitalAsset for the parcel
+    2. eu-elevation raster (5 m / 25 m WCS) — legacy path
+
     Returns a dict with status summary.
     """
     logger.info("[%s] DEM pipeline parcel=%s tenant=%s", job_id, parcel_id, tenant_id or "-")
@@ -66,17 +84,52 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
         logger.exception("[%s] cannot read parcel polygon", job_id)
         raise
 
-    resolution_m = resolution_for_area_ha(area_ha)
-    bbox = _bbox_with_buffer(geometry, resolution_m, cells=2)
+    dem_source = "ign"
+    utm_dem = None
 
-    client = DEMClient()
+    # ── 1. LiDAR DTM (cross-module: discovery via Orion, bytes via S3) ────
+    lidar_asset: LidarAsset | None = None
     try:
-        grid = client.fetch_dem(bbox, resolution_m, tenant_id=tenant_id or None)
-    except DEMUnavailable as exc:
-        _publish_unavailable(parcel_id, tenant_id, geometry, str(exc))
-        raise
+        lidar_asset = asyncio.run(
+            find_latest_lidar_asset(tenant_id or "platform", parcel_id)
+        )
+    except Exception as exc:
+        logger.warning("[%s] LiDAR asset discovery failed: %s", job_id, exc)
+    if lidar_asset is not None:
+        try:
+            dtm_bytes = fetch_dtm_bytes(lidar_asset)
+            centroid = shply_shape(geometry).centroid
+            cellsize = _lidar_cellsize_for_area(area_ha)
+            utm_dem = reproject_grid_to_utm(
+                dtm_bytes, centroid.x, centroid.y, cellsize_m=cellsize
+            )
+            dem_source = "lidar"
+            logger.info(
+                "[%s] LiDAR DTM %s: %d bytes, cellsize=%s",
+                job_id, lidar_asset.asset_id, len(dtm_bytes), cellsize or "native",
+            )
+        except Exception as exc:
+            logger.warning(
+                "[%s] LiDAR DTM fetch/reproject failed — fallback eu-elevation: %s",
+                job_id, exc,
+            )
+            utm_dem = None
 
-    utm_dem = _reproject_to_utm(grid)
+    # ── 2. eu-elevation WCS fallback ─────────────────────────────────────
+    if utm_dem is None:
+        resolution_m = resolution_for_area_ha(area_ha)
+        bbox = _bbox_with_buffer(geometry, resolution_m, cells=2)
+        client = DEMClient()
+        try:
+            grid = client.fetch_dem(bbox, resolution_m, tenant_id=tenant_id or None)
+        except DEMUnavailable as exc:
+            _publish_unavailable(parcel_id, tenant_id, geometry, str(exc))
+            raise
+        utm_dem = _reproject_to_utm(grid)
+
+    # Actual cellsize from the UTM raster (drives stream threshold + fidelity)
+    with rasterio.open(io.BytesIO(utm_dem)) as ds:
+        resolution_m = float(abs(ds.transform.a))
 
     eng = GeoLibreEngine()
     # Explicit engine steps with PHYSICAL stream threshold (1 ha), so the
@@ -106,7 +159,10 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     }
 
     # Flat-terrain detection (PENDING.md / spec §3.6)
-    data_fidelity = "ign_5m" if resolution_m <= 5.0 else "ign_25m"
+    if dem_source == "lidar":
+        data_fidelity = "lidar_05m" if resolution_m < 1.0 else "lidar_2m"
+    else:
+        data_fidelity = "ign_5m" if resolution_m <= 5.0 else "ign_25m"
     breached_arr = _read_raster(breached)
     if _is_flat(breached_arr):
         logger.warning("[%s] flat DEM -> degraded_flat", job_id)
@@ -197,7 +253,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     record = build_hydrology_record(
         tenant_id=tenant_id or "platform", parcel_id=parcel_id,
         geometry=geometry, observed_at=observed_at, metrics=metrics,
-        dem_source="ign",
+        dem_source=dem_source,
         data_fidelity=data_fidelity,
     )
     # ── Agronomic Models — Zonal (Ronda 2.6) ────────────

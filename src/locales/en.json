@@ -109,5 +109,7 @@
     "mechanism_saturationExcess": "Saturation (Dunne)",
     "mechanism_infiltrationExcess": "Infiltration (Horton)",
     "alertInputs": "Saturation {{sat}}% · Rain {{precip}}mm"
-  }
+  },
+  "fidelity_lidar_05m": "LiDAR 0.5 m",
+  "fidelity_lidar_2m": "LiDAR 2 m"
 }

@@ -47,7 +47,7 @@ _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}
 
 # Allowed nkz:dataFidelity values (Property on AgriParcelRecord, NOT an SDM type).
 # Aligns with the cross-module dataFidelity contract (AGENTS §8) and crop-health.
-_DATA_FIDELITY = {"ign_5m", "ign_25m", "degraded_flat", "unavailable"}
+_DATA_FIDELITY = {"ign_5m", "ign_25m", "lidar_05m", "lidar_2m", "degraded_flat", "unavailable"}
 
 # Zonal agronomic metrics that may appear on AgriParcelZone (Ronda 2.6).
 _ZONE_METRICS: dict[str, str] = {

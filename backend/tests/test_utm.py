@@ -62,3 +62,42 @@ def _build_geotiff_bytes(arr, origin_lon, origin_lat, pixel_deg, crs="EPSG:4258"
     ) as dst:
         dst.write(arr, 1)
     return buf.getvalue()
+
+
+def _build_metric_geotiff_bytes(arr, x0, y0, cellsize, crs="EPSG:25830"):
+    """GeoTIFF in a metric CRS (e.g. LiDAR DTM native EPSG:25830)."""
+    from rasterio.transform import from_origin
+    buf = io.BytesIO()
+    transform = from_origin(x0, y0, cellsize, cellsize)
+    with rasterio.open(
+        buf, "w", driver="GTiff", height=arr.shape[0], width=arr.shape[1],
+        count=1, dtype=str(arr.dtype), crs=crs, transform=transform,
+    ) as dst:
+        dst.write(arr, 1)
+    return buf.getvalue()
+
+
+def test_reproject_lidar_dtm_25830_native_cellsize():
+    """LiDAR DTM in EPSG:25830 (metric) reprojects to UTM keeping ~0.5 m."""
+    arr = np.full((40, 40), 440.0, dtype="float32")
+    geotiff = _build_metric_geotiff_bytes(arr, x0=600000.0, y0=4740000.0, cellsize=0.5)
+
+    utm_bytes = reproject_grid_to_utm(
+        geotiff, centroid_lon=-1.6432, centroid_lat=42.8167
+    )
+    with rasterio.open(io.BytesIO(utm_bytes)) as ds:
+        assert ds.crs.to_epsg() == 25830
+        assert abs(abs(ds.transform.a) - 0.5) < 0.01
+
+
+def test_reproject_lidar_dtm_forced_cellsize():
+    """cellsize_m=2.0 resamples a 0.5 m DTM to 2 m (memory gate, big parcels)."""
+    arr = np.full((40, 40), 440.0, dtype="float32")
+    geotiff = _build_metric_geotiff_bytes(arr, x0=600000.0, y0=4740000.0, cellsize=0.5)
+
+    utm_bytes = reproject_grid_to_utm(
+        geotiff, centroid_lon=-1.6432, centroid_lat=42.8167, cellsize_m=2.0
+    )
+    with rasterio.open(io.BytesIO(utm_bytes)) as ds:
+        assert abs(abs(ds.transform.a) - 2.0) < 1e-6
+        assert ds.width == 10 and ds.height == 10

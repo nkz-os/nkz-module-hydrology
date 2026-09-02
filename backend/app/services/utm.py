@@ -11,6 +11,7 @@ import math
 
 import numpy as np
 import rasterio
+from affine import Affine
 from rasterio.warp import calculate_default_transform, reproject, Resampling
 
 
@@ -31,12 +32,19 @@ def reproject_grid_to_utm(
     geotiff_degrees: bytes,
     centroid_lon: float,
     centroid_lat: float,
+    cellsize_m: float | None = None,
 ) -> bytes:
     """Reproject a GeoTIFF in degrees (EPSG:4258/4326) to UTM (metric cellsize).
 
+    Also accepts metric inputs (e.g. LiDAR DTM in EPSG:25830) — the source
+    CRS is read from the file.  ``cellsize_m`` optionally forces the output
+    cell size (used to resample 0.5 m LiDAR DTMs up on large parcels so the
+    flow-accumulation engine stays within sane memory bounds).
+
     Args:
-        geotiff_degrees: Input GeoTIFF bytes in a geographic CRS.
+        geotiff_degrees: Input GeoTIFF bytes (any CRS readable by rasterio).
         centroid_lon/lat: Centroid used to pick the UTM zone.
+        cellsize_m: Force output cell size (meters). None keeps native.
 
     Returns:
         GeoTIFF bytes reprojected to ETRS89 UTM, with metric cellsize.
@@ -51,6 +59,13 @@ def reproject_grid_to_utm(
         transform, width, height = calculate_default_transform(
             src_crs, dst_crs, ds.width, ds.height, *ds.bounds
         )
+        if cellsize_m is not None and cellsize_m > 0:
+            # Rescale the default transform to the requested cell size.
+            scale_x = abs(transform.a) / cellsize_m
+            scale_y = abs(transform.e) / cellsize_m
+            transform = Affine(cellsize_m, 0.0, transform.c, 0.0, -cellsize_m, transform.f)
+            width = max(1, round(width * scale_x))
+            height = max(1, round(height * scale_y))
         fill = src_nodata if src_nodata is not None else -9999.0
         profile = ds.profile.copy()
         profile.update(

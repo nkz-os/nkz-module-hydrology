@@ -12,6 +12,8 @@ interface Props {
 const FIDELITY_STYLES: Record<string, string> = {
   ign_5m: 'bg-green-500/15 text-green-500',
   ign_25m: 'bg-cyan-500/15 text-cyan-500',
+  lidar_05m: 'bg-emerald-500/15 text-emerald-500',
+  lidar_2m: 'bg-teal-500/15 text-teal-500',
   degraded_flat: 'bg-amber-500/15 text-amber-500',
   unavailable: 'bg-red-500/15 text-red-500',
 };
