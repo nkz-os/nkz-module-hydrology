@@ -17,6 +17,7 @@ Deactivate/teardown: log-only (actual cleanup in later phases).
 
 import hmac
 import logging
+import os
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
@@ -28,6 +29,8 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/internal", tags=["internal"])
+
+INTERNAL_SERVICE_SECRET = os.getenv("INTERNAL_SERVICE_SECRET", "")
 
 # NOTE (Ronda 2.2): hydrology creates NO placeholder entities at activation.
 # AgriParcelRecord/AgriParcelZone are published only when the DEM pipeline runs
@@ -82,6 +85,10 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
         subscriptions=[{"type": "DeviceMeasurement", "throttling": 30}],
         module_name="hydrology",
         context_url=settings.orion_ld_context,
+        notification_headers=(
+            {"X-Internal-Service-Secret": INTERNAL_SERVICE_SECRET}
+            if INTERNAL_SERVICE_SECRET else None
+        ),
     )
     sub_result = await registrar.ensure_all([body.tenant_id])
     logger.info(
