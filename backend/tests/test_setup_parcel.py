@@ -69,6 +69,42 @@ async def test_activate_only_ensures_subscription():
 
 
 @pytest.mark.asyncio
+async def test_activate_sends_notification_headers_when_secret_set():
+    """Registrar gets receiverInfo headers when INTERNAL_SERVICE_SECRET is set."""
+    from app.api.setup import setup_parcel, SetupParcelRequest
+
+    body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
+    req = type("R", (), {"headers": {"X-Internal-Service-Secret": "s3cr3t"}, "client": None})()
+
+    with patch("app.api.setup.get_settings", _mock_settings()), \
+         patch("app.api.setup.SubscriptionRegistrar") as SR, \
+         patch("app.api.setup.INTERNAL_SERVICE_SECRET", "the-secret"):
+
+        SR.return_value.ensure_all = AsyncMock(return_value={"created": 0, "skipped": 1, "errors": []})
+        await setup_parcel(req, body)
+
+    assert SR.call_args.kwargs["notification_headers"] == {"X-Internal-Service-Secret": "the-secret"}
+
+
+@pytest.mark.asyncio
+async def test_activate_omits_notification_headers_when_secret_unset():
+    """Registrar gets notification_headers=None when INTERNAL_SERVICE_SECRET is unset."""
+    from app.api.setup import setup_parcel, SetupParcelRequest
+
+    body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
+    req = type("R", (), {"headers": {"X-Internal-Service-Secret": "s3cr3t"}, "client": None})()
+
+    with patch("app.api.setup.get_settings", _mock_settings()), \
+         patch("app.api.setup.SubscriptionRegistrar") as SR, \
+         patch("app.api.setup.INTERNAL_SERVICE_SECRET", ""):
+
+        SR.return_value.ensure_all = AsyncMock(return_value={"created": 0, "skipped": 1, "errors": []})
+        await setup_parcel(req, body)
+
+    assert SR.call_args.kwargs["notification_headers"] is None
+
+
+@pytest.mark.asyncio
 async def test_deactivate_no_sdk_calls():
     """Deactivate does NOT call SubscriptionRegistrar (log-only)."""
     from app.api.setup import setup_parcel, SetupParcelRequest
