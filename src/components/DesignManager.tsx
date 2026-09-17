@@ -91,7 +91,7 @@ const DesignManager: React.FC<Props> = ({ parcelId }) => {
       {designs.map((d) => (
         <div key={d.id} className="border border-nkz-border rounded p-2 space-y-1">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-nkz-text truncate">
+            <span className="text-sm text-nkz-text-primary truncate">
               {d['nkz:label']?.value || t('hydrology:untitledDesign')}
             </span>
             <span className="text-xs text-nkz-muted whitespace-nowrap">
@@ -100,7 +100,7 @@ const DesignManager: React.FC<Props> = ({ parcelId }) => {
           </div>
           <div className="flex flex-wrap gap-1">
             <button onClick={() => showOnMap(d)}
-                    className="text-xs bg-nkz-accent text-white px-2 py-1 rounded">
+                    className="text-xs bg-nkz-accent-base text-white px-2 py-1 rounded">
               {t('hydrology:showOnMap')}
             </button>
             <button onClick={() => exportDesign(d, 'gpx')}

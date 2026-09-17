@@ -61,7 +61,7 @@ const ScenarioPanel: React.FC<Props> = ({ parcelId, refreshKey }) => {
             <tr key={r.key} className="border-t border-nkz-border">
               <td className="py-0.5">{t(`hydrology:${r.key}`)}</td>
               <td className="text-right">{fmt(r.baseline, r.digits, r.suffix)}</td>
-              <td className="text-right text-nkz-accent font-medium">{fmt(r.intervention, r.digits, r.suffix)}</td>
+              <td className="text-right text-nkz-accent-base font-medium">{fmt(r.intervention, r.digits, r.suffix)}</td>
             </tr>
           ))}
         </tbody>

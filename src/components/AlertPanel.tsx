@@ -10,7 +10,7 @@ interface Props {
 const SEV_COLOR: Record<string, string> = {
   critical: 'text-red-500',
   warning: 'text-amber-500',
-  info: 'text-nkz-accent',
+  info: 'text-nkz-accent-base',
 };
 
 /**
@@ -58,7 +58,7 @@ const AlertPanel: React.FC<Props> = ({ parcelId, refreshKey }) => {
               {t(`hydrology:mechanism_${a.mechanism}`, a.mechanism)}
             </span>
           </div>
-          <p className="text-xs mt-1 text-nkz-text">{a.description}</p>
+          <p className="text-xs mt-1 text-nkz-text-primary">{a.description}</p>
         </div>
       ))}
       {data.inputs && (

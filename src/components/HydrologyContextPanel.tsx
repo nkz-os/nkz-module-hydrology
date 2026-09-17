@@ -89,7 +89,7 @@ const HydrologyContextPanel: React.FC = () => {
   if (!parcelId) {
     return (
       <div className="p-4">
-        <h3 className="text-sm font-semibold text-nkz-text mb-1">{t('hydrology:title')}</h3>
+        <h3 className="text-sm font-semibold text-nkz-text-primary mb-1">{t('hydrology:title')}</h3>
         <p className="text-xs text-nkz-muted">{t('hydrology:noData')}</p>
       </div>
     );
@@ -98,23 +98,23 @@ const HydrologyContextPanel: React.FC = () => {
   return (
     <div className="p-4">
       <div className="flex items-center justify-between mb-2 gap-2">
-        <h3 className="text-sm font-semibold text-nkz-text">{t('hydrology:title')}</h3>
+        <h3 className="text-sm font-semibold text-nkz-text-primary">{t('hydrology:title')}</h3>
         <button
-          className="text-xs bg-nkz-accent text-white px-2 py-1 rounded whitespace-nowrap disabled:opacity-60"
+          className="text-xs bg-nkz-accent-base text-white px-2 py-1 rounded whitespace-nowrap disabled:opacity-60"
           onClick={runAnalysis}
           disabled={analysis === 'running'}
         >
           {analysis === 'running' ? t('hydrology:analysisRunning') : t('hydrology:runAnalysisCta')}
         </button>
       </div>
-      {analysis === 'done' && <p className="text-xs text-nkz-accent mb-2">{t('hydrology:analysisDone')}</p>}
+      {analysis === 'done' && <p className="text-xs text-nkz-accent-base mb-2">{t('hydrology:analysisDone')}</p>}
       {analysis === 'failed' && <p className="text-xs text-red-500 mb-2">{t('hydrology:analysisFailed')}</p>}
       <div className="flex gap-1 mb-3 border-b border-nkz-border overflow-x-auto">
         {TABS.map((tab) => (
           <button
             key={tab.id}
             className={`px-2 py-1 text-xs border-b-2 whitespace-nowrap ${
-              activeTab === tab.id ? 'border-nkz-accent text-nkz-accent' : 'border-transparent text-nkz-muted'
+              activeTab === tab.id ? 'border-nkz-accent-base text-nkz-accent-base' : 'border-transparent text-nkz-muted'
             }`}
             onClick={() => setActiveTab(tab.id)}
           >

@@ -74,7 +74,7 @@ const ParcelSummary: React.FC<Props> = ({ parcelId, refreshKey }) => {
   return (
     <div className="mb-3 pb-3 border-b border-nkz-border">
       <div className="flex items-center justify-between mb-2 gap-2">
-        <h4 className="text-xs font-semibold text-nkz-text">{t('hydrology:summaryTitle')}</h4>
+        <h4 className="text-xs font-semibold text-nkz-text-primary">{t('hydrology:summaryTitle')}</h4>
         {fidelity && (
           <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${fidelityClass(fidelity)}`}>
             {t(`hydrology:fidelity_${fidelity}`, fidelity)}
@@ -85,7 +85,7 @@ const ParcelSummary: React.FC<Props> = ({ parcelId, refreshKey }) => {
         {cells.map((c) => (
           <div key={c.labelKey}>
             <div className="text-[10px] text-nkz-muted">{t(c.labelKey)}</div>
-            <div className="text-sm font-semibold text-nkz-text">{c.value}</div>
+            <div className="text-sm font-semibold text-nkz-text-primary">{c.value}</div>
           </div>
         ))}
       </div>
@@ -94,7 +94,7 @@ const ParcelSummary: React.FC<Props> = ({ parcelId, refreshKey }) => {
           {meteo.map((c) => (
             <div key={c.labelKey}>
               <div className="text-[10px] text-nkz-muted">{t(c.labelKey)}</div>
-              <div className="text-sm font-semibold text-nkz-text">{c.value}</div>
+              <div className="text-sm font-semibold text-nkz-text-primary">{c.value}</div>
             </div>
           ))}
         </div>

@@ -145,7 +145,7 @@ const PondSitingTool: React.FC<Props> = ({ parcelId }) => {
         </select>
       </div>
       <button onClick={score} disabled={loading || !center}
-              className="bg-nkz-accent text-white px-3 py-1 rounded text-sm w-full disabled:opacity-60">
+              className="bg-nkz-accent-base text-white px-3 py-1 rounded text-sm w-full disabled:opacity-60">
         {loading ? t('hydrology:loading') : t('hydrology:pondViability')}
       </button>
       {result && center && (

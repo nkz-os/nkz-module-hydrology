@@ -25,7 +25,7 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunni
       <p className="text-nkz-muted mb-2">{t('hydrology:noData')}</p>
       {onRunAnalysis && (
         <button
-          className="text-xs bg-nkz-accent text-white px-2 py-1 rounded whitespace-nowrap disabled:opacity-60"
+          className="text-xs bg-nkz-accent-base text-white px-2 py-1 rounded whitespace-nowrap disabled:opacity-60"
           onClick={onRunAnalysis}
           disabled={analysisRunning}
         >

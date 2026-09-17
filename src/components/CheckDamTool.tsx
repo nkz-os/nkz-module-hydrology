@@ -76,7 +76,7 @@ const CheckDamTool: React.FC<Props> = ({ parcelId }) => {
                className="w-full border rounded px-2 py-1 text-sm" />
       </div>
       <button onClick={suggest} disabled={loading}
-              className="bg-nkz-accent text-white px-3 py-1 rounded text-sm w-full">
+              className="bg-nkz-accent-base text-white px-3 py-1 rounded text-sm w-full">
         {loading ? t('hydrology:loading') : t('hydrology:checkDam')}
       </button>
       {result && result.dams?.length > 0 && (
