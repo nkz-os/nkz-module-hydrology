@@ -35,7 +35,7 @@ const HydrologyLayerToggle: React.FC = () => {
           onChange={(e) => setTwiVisible(e.target.checked)}
           className="w-3.5 h-3.5"
         />
-        <span className={twiVisible ? 'text-nkz-text' : 'text-nkz-muted'}>
+        <span className={twiVisible ? 'text-nkz-text-primary' : 'text-nkz-muted'}>
           {t('hydrology:layerTwi')}
         </span>
       </label>
@@ -68,7 +68,7 @@ const HydrologyLayerToggle: React.FC = () => {
           onChange={(e) => setFlowsVisible(e.target.checked)}
           className="w-3.5 h-3.5"
         />
-        <span className={flowsVisible ? 'text-nkz-text' : 'text-nkz-muted'}>
+        <span className={flowsVisible ? 'text-nkz-text-primary' : 'text-nkz-muted'}>
           {t('hydrology:layerFlows')}
         </span>
       </label>
@@ -80,7 +80,7 @@ const HydrologyLayerToggle: React.FC = () => {
           onChange={(e) => setZonesVisible(e.target.checked)}
           className="w-3.5 h-3.5"
         />
-        <span className={zonesVisible ? 'text-nkz-text' : 'text-nkz-muted'}>
+        <span className={zonesVisible ? 'text-nkz-text-primary' : 'text-nkz-muted'}>
           {t('hydrology:layerZones')}
         </span>
       </label>
@@ -92,7 +92,7 @@ const HydrologyLayerToggle: React.FC = () => {
           onChange={(e) => setDesignsVisible(e.target.checked)}
           className="w-3.5 h-3.5"
         />
-        <span className={designsVisible ? 'text-nkz-text' : 'text-nkz-muted'}>
+        <span className={designsVisible ? 'text-nkz-text-primary' : 'text-nkz-muted'}>
           {t('hydrology:layerDesigns')}
         </span>
       </label>

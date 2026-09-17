@@ -50,7 +50,7 @@ const ExportMenu: React.FC<Props> = ({ designType, geometry, designId }) => {
   return (
     <div className="flex flex-wrap gap-1 mt-2">
       <button onClick={() => exportToGisRouting(geometry)}
-              className="text-xs bg-nkz-accent text-white px-2 py-1 rounded">
+              className="text-xs bg-nkz-accent-base text-white px-2 py-1 rounded">
         {t('hydrology:exportGisRouting')}
       </button>
       <button onClick={copyGeoJSON}
