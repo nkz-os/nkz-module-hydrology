@@ -244,7 +244,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
         data_fidelity=data_fidelity,
     )
     # ── Agronomic Models — Zonal (Ronda 2.6) ────────────
-    zones_raw = _compute_zones(result)
+    zones_raw = _compute_zones(result, geometry)
     try:
         zones_raw = extract_zonal_stats(
             zones_raw, result["slope.tif"], result["twi.tif"], result["accum.tif"],
@@ -478,7 +478,7 @@ def _stream_length_m(geojson_bytes: bytes) -> float:
     return total
 
 
-def _compute_zones(result: dict) -> list[dict]:
+def _compute_zones(result: dict, parcel_geometry: dict | None = None) -> list[dict]:
     """5 TWI quintile zones WITH real polygon geometry.
 
     Boundaries are emitted as ``twiRange`` strings (e.g. ``-inf-6.0``) so
@@ -486,6 +486,8 @@ def _compute_zones(result: dict) -> list[dict]:
     area/slope stats. Geometry is built from those same masks (consistency),
     unioned + simplified in UTM, then reprojected to WGS84 for the broker
     (every consumer — Cesium, GPX/KML, GIS-routing — expects lon/lat).
+    Finally each zone is clipped to the parcel polygon so TWI cells never bleed
+    into the surrounding buffer.
     """
     from rasterio.features import shapes
     from rasterio.warp import transform_geom
@@ -525,6 +527,16 @@ def _compute_zones(result: dict) -> list[dict]:
             merged = unary_union(polys).simplify(tolerance=res_m, preserve_topology=False)
             if not merged.is_empty:
                 geometry = transform_geom(crs, "EPSG:4326", mapping(merged))
+                # Clip to the parcel boundary so zones never bleed outside.
+                if parcel_geometry and geometry.get("type"):
+                    try:
+                        clipped = shp_shape(geometry).intersection(shp_shape(parcel_geometry))
+                        if clipped.is_empty:
+                            geometry = {}
+                        elif clipped.geom_type in ("Polygon", "MultiPolygon"):
+                            geometry = mapping(clipped)
+                    except Exception:
+                        pass
         zones.append({
             "zone_id": lab,
             "geometry": geometry,
