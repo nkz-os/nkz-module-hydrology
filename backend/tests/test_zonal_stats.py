@@ -22,6 +22,18 @@ def _synthetic_raster(shape=(40, 40), values=None, pixel_size=2.0):
     return buf.getvalue()
 
 
+def _synthetic_raster_nodata(values, nodata=-9999.0, pixel_size=2.0):
+    """Create a synthetic GeoTIFF with a declared nodata value (UTM fill)."""
+    values = np.asarray(values, dtype=np.float32)
+    buf = io.BytesIO()
+    transform = rasterio.transform.from_origin(600000, 4700000, pixel_size, pixel_size)
+    with rasterio.open(buf, "w", driver="GTiff", height=values.shape[0],
+                       width=values.shape[1], count=1, dtype="float32",
+                       crs="EPSG:25830", transform=transform, nodata=nodata) as dst:
+        dst.write(values, 1)
+    return buf.getvalue()
+
+
 class TestZonalStatsExtractor:
     def test_returns_same_number_of_zones(self):
         zones = [
@@ -81,6 +93,20 @@ class TestZonalStatsExtractor:
         ridge = next(z for z in result if z["zone_id"] == "twi-low")
         valley = next(z for z in result if z["zone_id"] == "twi-high")
         assert ridge["slopeMean"] > valley["slopeMean"]
+
+    def test_nodata_fill_excluded_from_mask(self):
+        """-9999.0 fill pixels must not corrupt slopeMean / area."""
+        z_twi = np.full((10, 10), -9999.0, dtype=np.float32)
+        z_twi[2:8, 2:8] = 5.0  # valid ridge (low TWI)
+        twi_buf = _synthetic_raster_nodata(z_twi)
+
+        z_slope = np.full((10, 10), -9999.0, dtype=np.float32)
+        z_slope[2:8, 2:8] = 25.0  # steep ridge
+        slope_buf = _synthetic_raster_nodata(z_slope)
+
+        zones = [{"zone_id": "twi-low", "twiRange": "-inf-10.0"}]
+        result = extract_zonal_stats(zones, slope_buf, twi_buf)
+        assert result[0]["slopeMean"] == pytest.approx(25.0)
 
     def test_empty_zones_returns_empty_list(self):
         slope = _synthetic_raster()

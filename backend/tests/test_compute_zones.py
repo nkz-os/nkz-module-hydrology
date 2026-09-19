@@ -23,6 +23,18 @@ def _twi_tif(values, crs="EPSG:25830", origin=(600000.0, 4700000.0), pixel=10.0)
     return buf.getvalue()
 
 
+def _twi_tif_nodata(values, nodata=-9999.0):
+    buf = io.BytesIO()
+    with rasterio.open(
+        buf, "w", driver="GTiff", height=values.shape[0],
+        width=values.shape[1], count=1, dtype="float32", crs="EPSG:25830",
+        transform=rasterio.transform.from_origin(600000.0, 4700000.0, 10.0, 10.0),
+        nodata=nodata,
+    ) as dst:
+        dst.write(values.astype("float32"), 1)
+    return buf.getvalue()
+
+
 def _first_xy(coords):
     if isinstance(coords[0], (int, float)):
         return coords[0], coords[1]
@@ -50,6 +62,17 @@ def test_compute_zones_emits_wgs84_polygon_geometry():
         assert "-" in z["twiRange"]
         assert z["pixelCount"] > 0
         assert z["areaHa"] > 0
+
+
+def test_compute_zones_excludes_nodata_fill():
+    """-9999.0 UTM fill (declared nodata) must not leak into quintiles."""
+    grid = np.full((10, 10), -9999.0, dtype="float32")
+    grid[2:8, 2:8] = np.arange(36, dtype="float32").reshape(6, 6)
+    zones = _compute_zones({"twi.tif": _twi_tif_nodata(grid)})
+    assert zones
+    for z in zones:
+        assert "-9999" not in z["twiRange"], z["twiRange"]
+        assert z["twiMean"] >= 0.0
 
 
 def test_compute_zones_empty_when_all_invalid():

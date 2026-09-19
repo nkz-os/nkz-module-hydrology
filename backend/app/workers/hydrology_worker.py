@@ -499,8 +499,11 @@ def _compute_zones(result: dict, parcel_geometry: dict | None = None) -> list[di
         transform = ds.transform
         crs = ds.crs
         res_m = max(abs(transform.a), abs(transform.e))
+        nodata = ds.nodata
 
     valid = np.isfinite(twi)
+    if nodata is not None:
+        valid &= twi != nodata
     flat = twi[valid]
     if flat.size == 0:
         return []

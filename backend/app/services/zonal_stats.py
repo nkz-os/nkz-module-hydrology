@@ -16,11 +16,6 @@ import numpy as np
 import rasterio
 
 
-def _read_raster(tif_bytes: bytes) -> np.ndarray:
-    with rasterio.open(io.BytesIO(tif_bytes)) as ds:
-        return ds.read(1)
-
-
 def _pixel_area_ha(transform: rasterio.Affine, count: int) -> float:
     return abs(transform.a * transform.e) / 10000.0 * count
 
@@ -32,7 +27,7 @@ def _parse_twi_range(twi_range: str) -> tuple[float, float]:
     avoiding the bug where a naive split on '-' would break on '-inf'.
     """
     m = re.match(
-        r"^(-inf|[\d.]+)\s*-\s*([\d.]+|inf)$",
+        r"^(-inf|-?[\d.]+)\s*-\s*(-?[\d.]+|inf)$",
         twi_range.strip(),
     )
     if not m:
@@ -68,22 +63,33 @@ def extract_zonal_stats(
     if not zones:
         return zones
 
-    slope_arr = _read_raster(slope_bytes)
-    twi_arr = _read_raster(twi_bytes)
+    with rasterio.open(io.BytesIO(twi_bytes)) as ds:
+        twi_arr = ds.read(1)
+        twi_nodata = ds.nodata
+    with rasterio.open(io.BytesIO(slope_bytes)) as ds:
+        slope_arr = ds.read(1)
+        slope_nodata = ds.nodata
+        transform = ds.transform
 
     twi_flat = twi_arr.ravel()
     slope_flat = slope_arr.ravel()
 
-    with rasterio.open(io.BytesIO(slope_bytes)) as ds:
-        transform = ds.transform
+    valid = np.isfinite(twi_flat)
+    if twi_nodata is not None:
+        valid &= twi_flat != twi_nodata
 
     for zone in zones:
         lo, hi = _parse_twi_range(zone.get("twiRange", "-inf-inf"))
-        mask = (twi_flat > lo) & (twi_flat <= hi)
+        mask = valid & (twi_flat > lo) & (twi_flat <= hi)
         count = int(mask.sum())
         if count == 0:
             continue
-        zone["slopeMean"] = float(np.nanmean(slope_flat[mask]))
+        slope_vals = slope_flat[mask].astype(float)
+        if slope_nodata is not None:
+            slope_vals = slope_vals[slope_vals != slope_nodata]
+        if slope_vals.size == 0:
+            continue
+        zone["slopeMean"] = float(np.nanmean(slope_vals))
         zone["areaHa"] = round(_pixel_area_ha(transform, count), 4)
         zone["pixelCount"] = count
 
