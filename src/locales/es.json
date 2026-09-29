@@ -108,7 +108,8 @@
     "severity_info": "Info",
     "mechanism_saturationExcess": "Saturación (Dunne)",
     "mechanism_infiltrationExcess": "Infiltración (Horton)",
-    "alertInputs": "Saturación {{sat}}% · Lluvia {{precip}}mm"
+    "alertInputs": "Saturación {{sat}}% · Lluvia {{precip}}mm",
+    "selectParcelHint": "Selecciona una parcela para ver sus capas hidrológicas"
   },
   "fidelity_lidar_05m": "LiDAR 0,5 m",
   "fidelity_lidar_2m": "LiDAR 2 m"

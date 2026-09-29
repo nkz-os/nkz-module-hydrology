@@ -9,6 +9,9 @@
  * Replace the MODULE_ placeholders below and delete this comment.
  */
 import { defineModule } from '@nekazari/module-kit';
+// Register translations at module load: the viewer widgets render before (and
+// without) the lazily loaded page.
+import './i18n';
 import { lazy } from 'react';
 import { moduleSlots } from './slots';
 import pkg from '../package.json';
@@ -40,7 +43,7 @@ export default defineModule({
   api: { basePath: '/api/v1/hydrology' },
 
   // === Permissions ===
-  requiredRoles: ['Farmer', 'TenantAdmin', 'PlatformAdmin'],
+  requiredRoles: ['Farmer', 'TechnicalConsultant', 'TenantAdmin', 'PlatformAdmin'],
   requiredPlan: 'basic',
 
   // === Data dependencies (CSP-of-data enforced by the api-gateway) ===

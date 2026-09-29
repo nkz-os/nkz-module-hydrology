@@ -1,5 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import { useViewer } from '@nekazari/sdk';
 import { useHydrologyLayerContext } from '../services/layerContext';
 
 /**
@@ -9,6 +10,7 @@ import { useHydrologyLayerContext } from '../services/layerContext';
  */
 const HydrologyLayerToggle: React.FC = () => {
   const { t } = useTranslation();
+  const { selectedEntityId } = useViewer();
   const {
     twiVisible,
     twiOpacity,
@@ -28,6 +30,9 @@ const HydrologyLayerToggle: React.FC = () => {
 
   return (
     <div className="hydrology-layer-toggle space-y-1">
+      {!selectedEntityId && (
+        <p className="text-[11px] text-nkz-muted px-1">{t('hydrology:selectParcelHint')}</p>
+      )}
       <label className={rowClass}>
         <input
           type="checkbox"
