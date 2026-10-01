@@ -38,9 +38,13 @@ from app.services.pond_score import pond_score
 from app.services.orion_context_client import OrionContextClient
 from app.services.zonal_stats import extract_zonal_stats
 from app.services import tile_service, records_publish
+from app.logging_setup import configure_logging
 from app.services.tile_service import parcel_short
 
 logger = logging.getLogger(__name__)
+
+# RQ configures only its own "rq.worker" logger.
+configure_logging(get_settings().log_level)
 
 _STREAM_AREA_M2 = 10_000.0  # 1 ha physical stream threshold (owner decision)
 _DEG2M_APPROX = 111_320.0   # metres per degree (approximate, for buffer/area)

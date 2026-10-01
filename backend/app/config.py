@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     app_name: str = "NKZ Water Studio"
     app_version: str = "1.0.0"
     debug: bool = False
+    log_level: str = "INFO"  # level for this module's own loggers; see app.logging_setup
     
     # API
     api_prefix: str = "/api/v1/hydrology"
