@@ -212,3 +212,57 @@ class TestOrionContextClient:
 
         assert ndvi == 0.77
         assert source == "orion"
+
+
+SOIL_MODULE_ENTITY = {
+    "id": "urn:ngsi-ld:AgriSoilExtended:p1",
+    "type": "AgriSoilExtended",
+    "horizons": [
+        {"depthFrom": 0, "depthTo": 5, "usdaTextureClass": "sandy-loam",
+         "ksatSaturated": 48.2, "fieldCapacity": 0.306, "wiltingPoint": 0.153,
+         "organicCarbon": 6.09, "hydrologicGroup": "A"},
+        {"depthFrom": 5, "depthTo": 15, "usdaTextureClass": "sandy-loam",
+         "ksatSaturated": 30.0, "fieldCapacity": 0.203, "wiltingPoint": 0.096},
+    ],
+}
+
+
+class TestSoilModuleEntity:
+    """The soil module publishes AgriSoilExtended with per-horizon properties."""
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_query_asks_for_both_soil_types(self, MockOrion):
+        """type=AgriSoil alone is a FALSE ZERO for the soil module's entities."""
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = []
+        with OrionContextClient("t") as client:
+            client.get_soil_context("urn:ngsi-ld:AgriParcel:p1")
+        _, kwargs = mock_orion.query_entities.call_args
+        assert set(kwargs["type"].split(",")) == {"AgriSoilExtended", "AgriSoil"}
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_reads_the_top_horizon(self, MockOrion):
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = [SOIL_MODULE_ENTITY]
+        with OrionContextClient("t") as client:
+            ctx = client.get_soil_context("urn:ngsi-ld:AgriParcel:p1")
+        assert ctx.source == "orion"
+        assert ctx.field_capacity_vv == 0.306
+        assert ctx.wilting_point_vv == 0.153
+        assert ctx.ksat_mmh == 48.2
+        # The soil module's hydrologic group (from Ksat) wins over a texture guess.
+        assert ctx.cn == 67  # HSG A, row crops
+
+    @patch("app.services.orion_context_client.SyncOrionClient")
+    def test_horizon_values_out_of_range_fall_back_per_value(self, MockOrion):
+        bad = {**SOIL_MODULE_ENTITY, "horizons": [
+            {"depthFrom": 0, "depthTo": 5, "usdaTextureClass": "loam",
+             "fieldCapacity": -3276.8, "wiltingPoint": 0.12, "ksatSaturated": None}]}
+        mock_orion = MockOrion.return_value.__enter__.return_value
+        mock_orion.query_entities.return_value = [bad]
+        with OrionContextClient("t") as client:
+            ctx = client.get_soil_context("urn:ngsi-ld:AgriParcel:p1")
+        assert ctx.field_capacity_vv == SoilContext().field_capacity_vv
+        assert ctx.wilting_point_vv == 0.12
+        assert ctx.ksat_mmh == SoilContext().ksat_mmh
+        assert ctx.cn == 78  # loam -> HSG B (no group published) -> row crops
