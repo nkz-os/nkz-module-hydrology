@@ -11,6 +11,7 @@ Follows AGENTS §8: standard SDM context via Orion-LD broker.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,6 +79,25 @@ def _derive_k_factor(texture: str, organic_carbon_pct: float | None = None) -> f
     return round(max(0.10, min(0.50, k)), 2)
 
 
+def _number(value: Any) -> float | None:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _water_content(value: Any) -> float | None:
+    """A volumetric water content in (0, 1), or None (nodata sentinels included)."""
+    v = _number(value)
+    return v if v is not None and 0.0 < v < 1.0 else None
+
+
+def _positive(value: Any) -> float | None:
+    v = _number(value)
+    return v if v is not None and v > 0.0 else None
+
+
 class OrionContextClient:
     """Fetches soil and vegetation context from Orion-LD.
 
@@ -109,9 +129,9 @@ class OrionContextClient:
     def get_soil_context(self, parcel_id: str) -> SoilContext:
         """Query AgriSoil linked to parcel, extract top horizon properties.
 
-        Uses query_entities(type="AgriSoil",
-        q='(hasAgriParcel=="<id>"|refAgriParcel=="<id>")') — dual-relationship
-        form covering both the new and legacy relationship names.
+        Uses query_entities(type="AgriSoilExtended,AgriSoil",
+        q='(hasAgriParcel=="<id>"|refAgriParcel=="<id>")') — both soil types and
+        both the new and legacy relationship names.
         Parses the first entity found.
         Returns SoilContext with source='orion' on success, 'default' on miss.
         """
@@ -119,7 +139,9 @@ class OrionContextClient:
             # Query both old (refAgriParcel) and new (hasAgriParcel) relationship
             # names per AGENTS §3 migration contract.
             entities = self.orion.query_entities(
-                type="AgriSoil",
+                # The soil module publishes AgriSoilExtended; type=AgriSoil alone
+                # matches none of its entities (a false zero -> defaults).
+                type="AgriSoilExtended,AgriSoil",
                 q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
                 options="keyValues",
             )
@@ -132,28 +154,36 @@ class OrionContextClient:
             return SoilContext()
 
     def _parse_soil_entity(self, entity: dict[str, Any]) -> SoilContext:
-        """Extract texture, Ksat, FC, WP, OC from a keyValues entity."""
-        texture = entity.get("usdaTextureClass")
-        ksat = entity.get("Ksaturation")
-        fc = entity.get("fieldCapacity")
-        wp = entity.get("wiltingPoint")
-        oc = entity.get("organicCarbon")
+        """Extract texture, Ksat, FC, WP, OC from a keyValues entity.
 
+        The soil module keeps them per horizon (top horizon used); legacy
+        AgriSoil entities carry them at the top level. Each value is checked and
+        falls back to its default on its own.
+        """
+        horizons = entity.get("horizons")
+        top = horizons[0] if isinstance(horizons, list) and horizons else None
+        src = top if isinstance(top, dict) else entity
+
+        texture = src.get("usdaTextureClass")
         if not texture:
             logger.info("AgriSoil has no usdaTextureClass, using defaults")
             return SoilContext()
 
-        hsg = _derive_hsg(str(texture))
-        cn = float(_hsg_to_cn(hsg))
-        ksat_val = float(ksat) if ksat is not None else 15.0
-        fc_val = float(fc) if fc is not None else 0.25
-        wp_val = float(wp) if wp is not None else 0.10
-        oc_val = float(oc) if oc is not None else None
-        kf = _derive_k_factor(str(texture), oc_val)
+        defaults = SoilContext()
+        ksat = _positive(src.get("ksatSaturated", src.get("Ksaturation")))
+        fc = _water_content(src.get("fieldCapacity"))
+        wp = _water_content(src.get("wiltingPoint"))
+        oc = _positive(src.get("organicCarbon"))
+        group = src.get("hydrologicGroup")
+        hsg = group if group in ("A", "B", "C", "D") else _derive_hsg(str(texture))
 
         return SoilContext(
-            cn=cn, ksat_mmh=ksat_val, field_capacity_vv=fc_val,
-            wilting_point_vv=wp_val, k_factor=kf, source="orion",
+            cn=float(_hsg_to_cn(hsg)),
+            ksat_mmh=ksat if ksat is not None else defaults.ksat_mmh,
+            field_capacity_vv=fc if fc is not None else defaults.field_capacity_vv,
+            wilting_point_vv=wp if wp is not None else defaults.wilting_point_vv,
+            k_factor=_derive_k_factor(str(texture), oc),
+            source="orion",
         )
 
     # ── Vegetation ─────────────────────────────────────────────────────
