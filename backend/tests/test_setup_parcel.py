@@ -69,8 +69,9 @@ async def test_activate_only_ensures_subscription():
 
 
 @pytest.mark.asyncio
-async def test_activate_sends_notification_headers_when_secret_set():
-    """Registrar gets receiverInfo headers when INTERNAL_SERVICE_SECRET is set."""
+async def test_activate_passes_secret_to_registrar_when_set(monkeypatch):
+    """The registrar owns the receiver auth header: master secret by default."""
+    monkeypatch.delenv("NKZ_NOTIFY_DERIVED_TOKENS", raising=False)
     from app.api.setup import setup_parcel, SetupParcelRequest
 
     body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
@@ -83,12 +84,34 @@ async def test_activate_sends_notification_headers_when_secret_set():
         SR.return_value.ensure_all = AsyncMock(return_value={"created": 0, "skipped": 1, "errors": []})
         await setup_parcel(req, body)
 
-    assert SR.call_args.kwargs["notification_headers"] == {"X-Internal-Service-Secret": "the-secret"}
+    assert SR.call_args.kwargs["internal_secret"] == "the-secret"
+    assert SR.call_args.kwargs["derived_tokens"] is False
+    assert "notification_headers" not in SR.call_args.kwargs
 
 
 @pytest.mark.asyncio
-async def test_activate_omits_notification_headers_when_secret_unset():
-    """Registrar gets notification_headers=None when INTERNAL_SERVICE_SECRET is unset."""
+async def test_activate_emits_derived_tokens_when_flag_on(monkeypatch):
+    """A per-tenant, per-receiver token once NKZ_NOTIFY_DERIVED_TOKENS is on."""
+    from app.api.setup import setup_parcel, SetupParcelRequest
+
+    monkeypatch.setenv("NKZ_NOTIFY_DERIVED_TOKENS", "true")
+    body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
+    req = type("R", (), {"headers": {"X-Internal-Service-Secret": "s3cr3t"}, "client": None})()
+
+    with patch("app.api.setup.get_settings", _mock_settings()), \
+         patch("app.api.setup.SubscriptionRegistrar") as SR, \
+         patch("app.api.setup.INTERNAL_SERVICE_SECRET", "the-secret"):
+
+        SR.return_value.ensure_all = AsyncMock(return_value={"created": 0, "skipped": 1, "errors": []})
+        await setup_parcel(req, body)
+
+    assert SR.call_args.kwargs["internal_secret"] == "the-secret"
+    assert SR.call_args.kwargs["derived_tokens"] is True
+
+
+@pytest.mark.asyncio
+async def test_activate_omits_secret_when_unset():
+    """Registrar gets no secret and no derived tokens when INTERNAL_SERVICE_SECRET is unset."""
     from app.api.setup import setup_parcel, SetupParcelRequest
 
     body = SetupParcelRequest(parcel_id="P-1", tenant_id="t-1", action="activate")
@@ -101,7 +124,8 @@ async def test_activate_omits_notification_headers_when_secret_unset():
         SR.return_value.ensure_all = AsyncMock(return_value={"created": 0, "skipped": 1, "errors": []})
         await setup_parcel(req, body)
 
-    assert SR.call_args.kwargs["notification_headers"] is None
+    assert SR.call_args.kwargs["internal_secret"] is None
+    assert SR.call_args.kwargs["derived_tokens"] is False
 
 
 @pytest.mark.asyncio

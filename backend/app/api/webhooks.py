@@ -11,31 +11,36 @@ state and must never raise on arbitrary/malformed bodies. Sensor-driven
 recompute is future work (spec Ronda 2.x).
 """
 
-import hmac
 import logging
 import os
 
 from fastapi import APIRouter, HTTPException, Request, Response
+from nkz_platform_sdk.notify_auth import accept_master_from_env, verify_notification
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
-def _reject_unauthenticated_notify(x_internal_secret: str | None) -> HTTPException | None:
-    """401 unless the notification carries the internal secret (flag-gated).
+def _reject_unauthenticated_notify(headers) -> HTTPException | None:
+    """401 unless the notification authenticates (flag-gated).
 
     Two-phase rollout: NOTIFY_REQUIRE_INTERNAL_SECRET stays off until subscription
     creators have converged to carry receiverInfo, then flips on with no code deploy.
+    Accepts the token bound to this tenant and host (nkz_platform_sdk.notify_auth)
+    and, until NKZ_NOTIFY_ACCEPT_MASTER is false, the master secret itself.
     """
     require = os.getenv("NOTIFY_REQUIRE_INTERNAL_SECRET", "").lower() in (
         "1", "true", "yes", "on"
     )
     if not require:
         return None
-    secret = os.getenv("INTERNAL_SERVICE_SECRET", "")
-    if not secret or not hmac.compare_digest(x_internal_secret or "", secret):
-        return HTTPException(status_code=401, detail="missing or invalid internal secret")
+    if not verify_notification(
+        headers,
+        secret=os.getenv("INTERNAL_SERVICE_SECRET", ""),
+        accept_master=accept_master_from_env(),
+    ):
+        return HTTPException(status_code=401, detail="missing or invalid notification credentials")
     return None
 
 
@@ -61,9 +66,7 @@ async def fiware_sensors(request: Request) -> Response:
     A missing `refDevice` or value means there is nothing safe to persist — skip the
     entity rather than writing a guessed or empty device id.
     """
-    reject = _reject_unauthenticated_notify(
-        request.headers.get("X-Internal-Service-Secret")
-    )
+    reject = _reject_unauthenticated_notify(request.headers)
     if reject:
         raise reject
 
