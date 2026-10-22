@@ -1,0 +1,39 @@
+# NKZ Water Studio Backend
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+httpx>=0.26.0
+python-multipart>=0.0.6
+boto3>=1.34.0
+
+# Database (optional - uncomment if needed)
+# sqlalchemy>=2.0.0
+# asyncpg>=0.29.0
+# alembic>=1.13.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.23.0
+httpx>=0.26.0
+
+# Hydrology analysis
+rq>=1.16.0
+redis>=5.0.0
+rasterio>=1.3.0
+numpy>=1.24.0
+pillow>=10.0.0  # HPND license (AGPL-compatible); TWI overlay PNG render
+
+# Platform SDK
+nkz-platform-sdk>=0.10.0
+minio>=7.2.0
+requests>=2.31.0  # SyncOrionClient (SDK 0.8.x) uses requests; SDK omits it
+
+# Geo / WASM
+geolibre-wasm==0.5.1  # pin: D8 tools fixed (wasm thread-spawn trap resolved in 0.5.1)
+
+# Development
+black>=24.1.0
+ruff>=0.1.0
+shapely>=2.0.4
+pyproj>=3.6.0

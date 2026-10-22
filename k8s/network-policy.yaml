@@ -1,0 +1,37 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: hydrology-worker-egress
+  namespace: nekazari
+spec:
+  podSelector:
+    matchLabels:
+      app: hydrology-worker
+  policyTypes:
+    - Egress
+  egress:
+    # DNS (CoreDNS)
+    - to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # In-cluster services (redis, orion-ld, minio, api-gateway)
+    - to:
+        - podSelector: {}
+    # External HTTPS (Open-Meteo Archive, Copernicus DEM)
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP

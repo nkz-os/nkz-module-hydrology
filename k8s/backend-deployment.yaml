@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hydrology-api
+  namespace: nekazari
+  labels:
+    app: hydrology-api
+    component: backend
+    module: hydrology
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hydrology-api
+  template:
+    metadata:
+      labels:
+        app: hydrology-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/nkz-os/nkz-module-hydrology/hydrology-backend:latest
+          # Template only — production tag (full SHA) is pinned in
+          # gitops-config/overlays/modules/hydrology/*-deployment.yaml
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: hydrology-config
+                optional: true
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: password
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis-service:6379/0"
+            - name: ORION_LD_URL
+              value: "http://orion-ld-service:1026"
+            - name: INTERNAL_SERVICE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: internal-service-secret
+                  key: INTERNAL_SERVICE_SECRET
+            - name: HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jwt-secret
+                  key: secret
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: access-key
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: minio-secret
+                  key: secret-key
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hydrology-api-service
+  namespace: nekazari
+spec:
+  selector:
+    app: hydrology-api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
+  type: ClusterIP
