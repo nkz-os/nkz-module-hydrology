@@ -75,7 +75,8 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
             "action": body.action,
         }
 
-    # Activate path: ensure the DeviceMeasurement subscription only.
+    # Activate path: ensure the DeviceMeasurement subscription only. No throttling:
+    # Orion applies it per subscription, i.e. across every device of the tenant.
     # Hydrology creates NO entities at activation — AgriParcelRecord/Zone are
     # published only when the DEM pipeline runs (real data), not at setup.
     settings = get_settings()
@@ -83,7 +84,7 @@ async def setup_parcel(request: Request, body: SetupParcelRequest):
     registrar = SubscriptionRegistrar(
         orion_url=settings.orion_ld_url,
         notification_url=notification_url,
-        subscriptions=[{"type": "DeviceMeasurement", "throttling": 30}],
+        subscriptions=[{"type": "DeviceMeasurement", "throttling": None}],
         module_name="hydrology",
         context_url=settings.orion_ld_context,
         # The registrar owns the receiver auth header: the master secret (legacy) or,
