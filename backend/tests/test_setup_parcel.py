@@ -66,6 +66,8 @@ async def test_activate_only_ensures_subscription():
 
     SR.assert_called_once()
     SR.return_value.ensure_all.assert_awaited_once()
+    # No throttling: Orion applies it per subscription, across every device of the tenant.
+    assert SR.call_args.kwargs["subscriptions"] == [{"type": "DeviceMeasurement", "throttling": None}]
 
 
 @pytest.mark.asyncio
