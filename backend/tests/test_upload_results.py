@@ -55,7 +55,7 @@ def test_upload_results_persists_streams_geojson():
 
 
 def test_upload_results_persists_derived_rasters():
-    """All three derived rasters land in MinIO under design_generator's key format."""
+    """All four derived rasters land in MinIO under design_generator's key format."""
     from app.workers.hydrology_worker import _upload_results
 
     s3 = MagicMock()
@@ -69,4 +69,5 @@ def test_upload_results_persists_derived_rasters():
         "hydrology/tenant1/p1/breached.tif": b"breached-bytes",
         "hydrology/tenant1/p1/accum.tif": b"accum-bytes",
         "hydrology/tenant1/p1/slope.tif": b"slope-bytes",
+        "hydrology/tenant1/p1/twi.tif": b"twi-bytes",
     }
