@@ -187,3 +187,12 @@ def test_record_rejects_invalid_data_fidelity():
             dem_source="ign",
             data_fidelity="bogus",
         )
+
+
+def test_zones_carry_hydrology_zone_type():
+    zones = build_hydrology_zones(
+        tenant_id=TENANT, parcel_id=PARCEL, observed_at=OBSERVED,
+        zones=[{"zone_id": "twi-mid", "geometry": POLY, "twiMean": 8.0,
+                "twiRange": "[6,10]", "areaHa": 3.0, "pixelCount": 300}],
+    )
+    assert zones[0]["nkz:zoneType"] == {"type": "Property", "value": "hydrology"}

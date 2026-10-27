@@ -149,6 +149,7 @@ def build_hydrology_zones(
             "hasAgriParcel": {"type": "Relationship", "object": parcel_id},
             "dateObserved": {"type": "Property", "value": {"@type": "DateTime", "@value": observed_at}},
             "nkz:zoneId": {"type": "Property", "value": zone_id},
+            "nkz:zoneType": {"type": "Property", "value": "hydrology"},
         }
         # Only emit location for a valid GeoJSON geometry. _compute_zones may
         # yield geometry={} → an empty GeoProperty is rejected by Orion.

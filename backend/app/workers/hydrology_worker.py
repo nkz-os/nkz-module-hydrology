@@ -425,12 +425,14 @@ def _upload_results(parcel_id: str, tenant_id: str, result: dict) -> None:
     except Exception:
         logger.exception("streams upload failed")
     # Ronda 2.6+: persist derived rasters for the design API endpoints
-    for raster_name in ("breached.tif", "accum.tif", "slope.tif"):
-        if raster_name in result:
-            try:
-                _put_raster(parcel_id, tenant_id, raster_name, result[raster_name])
-            except Exception:
-                logger.exception("%s upload failed", raster_name)
+    for raster_name in ("breached.tif", "accum.tif", "slope.tif", "twi.tif"):
+        if raster_name not in result:
+            logger.warning("%s missing from pipeline result; not uploaded", raster_name)
+            continue
+        try:
+            _put_raster(parcel_id, tenant_id, raster_name, result[raster_name])
+        except Exception:
+            logger.exception("%s upload failed", raster_name)
 
 
 def _put_geojson(parcel_id: str, tenant_id: str, data: bytes) -> None:
