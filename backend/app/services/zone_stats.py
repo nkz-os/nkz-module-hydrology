@@ -8,6 +8,7 @@ fidelity ``parcel_inherited`` instead of fabricating a zone value.
 from __future__ import annotations
 
 import io
+import logging
 from typing import Any, Optional
 
 import numpy as np
@@ -17,6 +18,8 @@ from rasterio.warp import transform_geom
 
 MIN_ZONE_PIXELS = 20
 _WGS84 = "EPSG:4326"
+
+logger = logging.getLogger(__name__)
 
 
 def read_raster(data: bytes) -> tuple[np.ndarray, Any, Any]:
@@ -69,23 +72,33 @@ def zone_stats(
 ) -> list[dict]:
     """Per-zone statistics; zones are ``{zoneId, zoneVersion, geometry}``."""
     valid = np.isfinite(twi)
-    for other in (slope, accum):
-        if other is not None and other.shape != twi.shape:
-            raise ValueError("raster grids differ in shape")
+    # A grid mismatch is a server-side data fault: drop that layer's stats.
+    if slope is not None and slope.shape != twi.shape:
+        logger.warning("zone_stats: slope grid %s != twi grid %s; slopeMean omitted", slope.shape, twi.shape)
+        slope = None
+    if accum is not None and accum.shape != twi.shape:
+        logger.warning("zone_stats: accum grid %s != twi grid %s; flowAccumMax omitted", accum.shape, twi.shape)
+        accum = None
     parcel = _stats(twi, slope, accum, valid, parcel_p80)
 
     results = []
     for z in zones:
-        geom = transform_geom(_WGS84, crs, z["geometry"])
-        inside = geometry_mask([geom], out_shape=twi.shape, transform=transform, invert=True)
-        sel = inside & valid
-        if int(sel.sum()) >= MIN_ZONE_PIXELS:
+        zid = z["zoneId"]
+        try:
+            geom = transform_geom(_WGS84, crs, z["geometry"])
+            inside = geometry_mask([geom], out_shape=twi.shape, transform=transform, invert=True)
+            sel = inside & valid
+            n = int(sel.sum())
+        except Exception as e:  # isolate: one bad zone must not fail the others
+            logger.warning("zone_stats: zone %s could not be masked (%s); parcel values inherited", zid, e)
+            n = 0
+        if n >= MIN_ZONE_PIXELS:
             vals, fidelity = _stats(twi, slope, accum, sel, parcel_p80), "zone_specific"
         else:
             vals, fidelity = dict(parcel), "parcel_inherited"
         results.append(
             {
-                "zoneId": z["zoneId"],
+                "zoneId": zid,
                 "zoneVersion": z.get("zoneVersion"),
                 **vals,
                 "fidelity": fidelity,
