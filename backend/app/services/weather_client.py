@@ -1,4 +1,5 @@
-"""Weather client for hydrology: fetches zonal stats from weather-map.
+"""Weather client for hydrology: zonal stats from weather-map, daily rain and ET0
+from weather-api.
 
 Service-to-service (namespace ``nekazari``, not behind api-gateway).  Auth is
 ``X-Tenant-ID`` + ``X-User-ID`` plus the module signature ``X-Auth-Signature``
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 import httpx
@@ -29,21 +31,20 @@ class WeatherUnavailable(Exception):
 class ParcelWeather:
     """Zonal weather stats for a parcel on a given date.
 
-    ``precipitation_mm`` is derived from ``water_balance.mean + eto.mean``
-    because weather-map exposes ``water_balance`` (= precip − ET0), not raw
-    precipitation.
+    weather-map has no rain metric: ``precipitation_mm`` is filled from
+    weather-api's daily series (``fetch_daily_water``), never derived here.
     """
     date: str                         # ISO-8601 date string
     temperature_avg: float | None     # °C
     temperature_min: float | None     # °C
     eto_mm: float | None              # mm/day (reference ET0)
-    precipitation_mm: float | None    # mm (reconstructed: wb + et0)
+    precipitation_mm: float | None    # mm, last closed day (weather-api)
     soil_moisture: float | None       # m³/m³
     fidelity: str                     # "parcel_weather" | "unavailable"
 
 
 # Default metrics requested from weather-map /stats endpoint.
-_DEFAULT_METRICS = "temperature_avg,temperature_min,eto,water_balance,soil_moisture"
+_DEFAULT_METRICS = "temperature_avg,temperature_min,eto,soil_moisture"
 
 
 class WeatherClient:
@@ -56,8 +57,10 @@ class WeatherClient:
         print(pw.eto_mm)
     """
 
-    def __init__(self, base_url: str | None = None, timeout: float = 15.0):
+    def __init__(self, base_url: str | None = None, timeout: float = 15.0,
+                 daily_url: str | None = None):
         self._base = (base_url or get_settings().weather_map_url).rstrip("/")
+        self._daily = (daily_url or get_settings().weather_api_url).rstrip("/")
         self._timeout = timeout
 
     @staticmethod
@@ -110,7 +113,8 @@ class WeatherClient:
 
             { "metrics": { "<metric>": { "mean": ..., ... }, ... } }
 
-        ``precipitation_mm`` is reconstructed: ``water_balance.mean + eto.mean``.
+        ``precipitation_mm`` stays None: weather-map's ``water_balance`` is a
+        5-day sum and cannot be combined with the daily ET0.
         """
         m = body.get("metrics", {})
 
@@ -118,22 +122,41 @@ class WeatherClient:
             v = m.get(metric, {}).get("mean")
             return float(v) if v is not None else None
 
-        eto = _mean("eto")
-        wb = _mean("water_balance")
-        # Reconstruct raw precipitation: precip = water_balance + eto
-        precip: float | None = None
-        if eto is not None and wb is not None:
-            precip = wb + eto
-
         return ParcelWeather(
             date=date_label,
             temperature_avg=_mean("temperature_avg"),
             temperature_min=_mean("temperature_min"),
-            eto_mm=eto,
-            precipitation_mm=precip,
+            eto_mm=_mean("eto"),
+            precipitation_mm=None,
             soil_moisture=_mean("soil_moisture"),
             fidelity="parcel_weather",
         )
+
+    # ── daily rain and ET0 ────────────────────────────────────────────────
+
+    def fetch_daily_water(
+        self, parcel_id: str, tenant_id: str, day: date,
+    ) -> tuple[float | None, float | None]:
+        """(precip_mm, et0_mm) of one closed day from weather-api's parcel series.
+
+        Gaps in the parcel's own series are filled from Open-Meteo by weather-api.
+
+        Raises:
+            WeatherUnavailable: on network error, non-200 status or no row for the day.
+        """
+        short = parcel_id.rsplit(":", 1)[-1]
+        url = f"{self._daily}/api/weather/parcel/{short}/daily"
+        params = {"start": day.isoformat(), "end": day.isoformat(), "fill": "open_meteo"}
+        try:
+            resp = httpx.get(url, params=params, headers=self._headers(tenant_id), timeout=self._timeout)
+        except httpx.HTTPError as exc:
+            raise WeatherUnavailable(f"weather-api unreachable: {exc}") from exc
+        if resp.status_code != 200:
+            raise WeatherUnavailable(f"weather-api {resp.status_code}: {resp.text[:200]}")
+        rows = [d for d in (resp.json() or {}).get("days") or [] if str(d.get("date", ""))[:10] == day.isoformat()]
+        if not rows:
+            raise WeatherUnavailable(f"weather-api: no daily row for {day.isoformat()}")
+        return rows[0].get("precip_mm"), rows[0].get("et0_mm")
 
     # ── forecast ──────────────────────────────────────────────────────────
 

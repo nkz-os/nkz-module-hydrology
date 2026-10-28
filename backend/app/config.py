@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     self_url: str = "http://hydrology-api-service:8000"
     eu_elevation_url: str = "http://elevation-api-service:80"
     weather_map_url: str = "http://weather-map-backend:8080"
+    # weather-api parcel daily series (closed days, gaps filled from Open-Meteo): rain and ET0.
+    weather_api_url: str = "http://weather-api-service:8000"
 
     # NGSI-LD Context
     orion_ld_context: str = "http://api-gateway-service:5000/ngsi-ld-context.json"
