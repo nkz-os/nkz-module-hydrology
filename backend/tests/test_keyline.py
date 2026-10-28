@@ -449,7 +449,7 @@ PARCEL2 = box(600003.3, 4699803.3, 600196.7, 4699996.7)
 
 def _layout(dem, parcel=PARCEL2, kp=(50, 50), **kw):
     from app.services.keyline import keyline_layout
-    return keyline_layout(dem, TF2, np.ones(dem.shape, bool), parcel, [_kp2(dem, *kp)], 12.0, **kw)
+    return keyline_layout(dem, TF2, np.ones(dem.shape, bool), parcel, [_kp2(dem, *kp)], 12.0, **kw)["lines"]
 
 
 def _no_crossings(lines):
@@ -552,10 +552,53 @@ def test_end_to_end_valley_to_layout():
     mask = np.ones(dem.shape, bool)
     kps = detect_keypoints(dem, tf, acc, mask)
     parcel = box(tf.c + 5, tf.f - 155, tf.c + 155, tf.f - 5)
-    res = keyline_layout(dem, tf, mask, parcel, kps, 12.0)
+    res = keyline_layout(dem, tf, mask, parcel, kps, 12.0, flow_accum=acc)["lines"]
     assert any(r["direction"] == "keyline" for r in res)
     lines = _lines(res)
     assert _no_crossings(lines)
     assert all(g.difference(parcel.buffer(1e-6)).is_empty for g in lines)
     assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res)
     assert _coverage(lines, parcel) > 0.8
+
+
+def _spur():
+    """Two valleys running south at x = 50 m and x = 150 m with a spur between
+    them (crest at x = 100 m); their drainage lines carry 1000 cells."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x, y = (j + 0.5) * 2.0, (i + 0.5) * 2.0
+    dv = np.minimum(np.abs(x - 50), np.abs(x - 150))
+    dem = 100 - 0.04 * y + 0.12 * (np.sqrt(dv ** 2 + 25) - 5)
+    acc = np.zeros((N2, N2))
+    acc[:, 25] = acc[:, 75] = 1000.0
+    return dem, acc
+
+
+def test_layout_guides_fall_away_from_drainage_on_a_spur():
+    from app.services.keyline import _profile, keyline_layout
+    dem, acc = _spur()
+    res = keyline_layout(dem, TF2, np.ones(dem.shape, bool), PARCEL2, [], 12.0, flow_accum=acc)
+    guides = [r["geometry"] for r in res["lines"] if r["direction"] == "guide"]
+    to_valley = lambda p: min(abs(p[0] - (TF2.c + 50)), abs(p[0] - (TF2.c + 150)))
+    sides = set()
+    for g in guides:
+        d, z = _profile(g, dem, ~TF2, 0.25)
+        k = int(np.argmax(z))
+        assert min(d[k], g.length - d[k]) <= 1.0          # highest point is an end
+        high, low = (g.coords[0], g.coords[-1]) if d[k] <= 1.0 else (g.coords[-1], g.coords[0])
+        assert to_valley(low) > to_valley(high)          # falls away from the valley
+        sides.add(g.centroid.x < TF2.c + 100)
+    assert len(guides) >= 4 and sides == {True, False}
+    assert _coverage(_lines(res["lines"]), PARCEL2) > 0.8
+    assert res["coverage_truncated"] is False
+
+
+def test_layout_reports_when_the_seed_limit_stops_it(monkeypatch):
+    from app.services import keyline
+    from app.services.keyline import keyline_layout
+    fan = _fan()
+    run = lambda: keyline_layout(fan, TF2, np.ones(fan.shape, bool), PARCEL2, [_kp2(fan, 50, 50)], 12.0)
+    assert run()["coverage_truncated"] is False
+    monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
+    stopped = run()
+    assert stopped["coverage_truncated"] is True and stopped["failed_seeds"] == 0
+    assert not any(r["direction"] == "guide" for r in stopped["lines"])

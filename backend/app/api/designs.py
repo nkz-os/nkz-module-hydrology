@@ -157,10 +157,18 @@ def generate_keyline(
     if not kps:
         return {"status": "no_keypoint", "detail": "No keypoint found in this parcel"}
 
-    layout = keyline_layout(
+    result = keyline_layout(
         dem_arr, transform, parcel_mask, parcel_utm, kps, req.spacing,
-        grade=req.grade, max_lines=req.lines,
+        grade=req.grade, max_lines=req.lines, flow_accum=accum_arr,
     )
+    layout = result["lines"]
+    if result["coverage_truncated"]:
+        logger.warning(
+            "keyline layout for parcel %s (tenant %s) stopped at the seed limit: "
+            "%d seeds gave no guide, %d lines, spacing %.1f m, grade %.4f",
+            req.parcel_id, auth.tenant_id, result["failed_seeds"], len(layout),
+            req.spacing, req.grade,
+        )
 
     def _line_wgs(g) -> dict:
         return {"type": "LineString", "coordinates": _to_wgs84([list(c) for c in g.coords], crs)}
@@ -193,6 +201,7 @@ def generate_keyline(
         "keylines_metrics": [_metrics(p) for p in keyline_entries],
         "parallel_lines": parallels,
         "max_line_grade": MAX_LINE_GRADE,
+        "coverage_truncated": result["coverage_truncated"],
         "request": req.model_dump(),
         "status": "ok",
     }

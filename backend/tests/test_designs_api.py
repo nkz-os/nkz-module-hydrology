@@ -586,3 +586,46 @@ def test_keyline_on_fine_dem_with_furrows():
     res = _call_keyline(_valley_rasters(0.5, furrow=0.08), _parcel_wgs(size=160))
     assert res["status"] == "ok"
     assert _utm(res["keyline"]).length > 50
+
+
+def _sharp_v_rasters(size=80):
+    """A 50 % V valley: on the 2 m analysis grid its keyline cannot hold the
+    1.5 % line cap, so the pattern is made of guides only."""
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    i = np.arange(size)[:, None].astype(float)
+    j = np.arange(size)[None, :].astype(float)
+    dem = np.where(i <= 40, 120 - 0.5 * i, 100 - 0.05 * (i - 40)) + 0.5 * np.abs(j - 40)
+    acc = np.zeros((size, size))
+    acc[:, 40] = 80 - np.arange(size)
+    out = {}
+    for name, arr in (("breached.tif", dem), ("accum.tif", acc)):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=size, width=size, count=1, dtype="float32",
+                           crs="EPSG:25830", transform=from_origin(600000, 4700000, 1.0, 1.0)) as dst:
+            dst.write(arr.astype("float32"), 1)
+        out[name] = buf.getvalue()
+    return out
+
+
+def test_keyline_ok_without_keyline_but_with_guides():
+    res = _call_keyline(_sharp_v_rasters(), _parcel_wgs())
+    assert res["status"] == "ok"
+    assert res["keyline"] is None and res["keylines"] == [] and res["keyline_metrics"] is None
+    assert res["keypoint"]["type"] == "Point"
+    assert any(p["direction"] == "guide" for p in res["parallel_lines"])
+    assert res["coverage_truncated"] is False
+
+
+def test_keyline_reports_and_logs_truncated_coverage(monkeypatch, caplog):
+    import logging
+    from app.services import keyline
+
+    monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
+    with caplog.at_level(logging.WARNING, logger="app.api.designs"):
+        res = _call_keyline(_valley_rasters(1.0), _parcel_wgs(size=160))
+    assert res["status"] == "ok" and res["coverage_truncated"] is True
+    assert any("seed limit" in r.getMessage() and "p-1" in r.getMessage() for r in caplog.records)
