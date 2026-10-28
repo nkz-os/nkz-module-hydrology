@@ -26,6 +26,7 @@ from app.services.design_generator import (
     find_slope_inflections,
 )
 from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
+from app.services.hydro_record import nkz_attr
 from app.services.keyline import detect_keyline
 from app.services.pond_score import pond_score
 from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
@@ -501,7 +502,7 @@ def update_design(
     try:
         orion = SyncOrionClient(auth.tenant_id)
         current = orion.get_entity(design_id)
-        version = (current.get("nkz:version", {}).get("value", 0) or 0) + 1
+        version = (nkz_attr(current, "version") or 0) + 1
 
         attrs = {
             "location": {"type": "GeoProperty", "value": req.geometry},
@@ -578,7 +579,7 @@ def export_design(
     if not geom:
         raise HTTPException(status_code=404, detail="Design has no geometry")
 
-    name = (entity.get("nkz:label", {}) or {}).get("value", "Hydrology Design")
+    name = nkz_attr(entity, "label") or "Hydrology Design"
 
     if format == "gpx":
         return {

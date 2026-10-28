@@ -26,6 +26,24 @@ def num_attr(attr: Any) -> float | None:
         return None
 
 
+NKZ_NS = "https://nkz-os.org/ns/"
+
+
+def nkz_attr(entity: dict, name: str) -> Any:
+    """Value of an nkz: term in any form the broker returns it, unwrapped.
+
+    The broker answers with the prefixed name, the name compacted by the
+    @context, or the full IRI when the term is outside the context it used.
+    """
+    for key in (f"nkz:{name}", name, NKZ_NS + name):
+        if key in entity:
+            value = entity[key]
+            if isinstance(value, dict):
+                value = value.get("value", value.get("@value"))
+            return value
+    return None
+
+
 def latest_hydro_record(orion: SyncOrionClient, parcel_id: str) -> dict:
     """Latest hydrology AgriParcelRecord for the parcel (empty dict if none)."""
     entities = orion.query_entities(
