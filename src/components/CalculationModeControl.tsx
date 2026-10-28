@@ -51,7 +51,7 @@ const CalculationModeControl: React.FC<Props> = ({ parcelId, onRerun, analysisRu
   // GET failed: show the defaults (marked as such) next to the error.
   const shown: ParcelSettings = settings ?? { mode: 'storm', return_period_years: 10, is_default: true };
 
-  const disabled = !canEdit || saving;
+  const disabled = !canEdit || saving || error === 'load';
   const errorKey = {
     load: 'modeLoadFailed', forbidden: 'modeForbidden', invalid: 'modeInvalid', save: 'modeSaveFailed',
   };
@@ -128,12 +128,14 @@ export const DesignLabel: React.FC<{ design?: DesignInfo }> = ({ design }) => {
   const source = rawSource === 'reanalysis' ? t('hydrology:designSourceReanalysis') : rawSource;
   return (
     <div className="text-[10px] text-nkz-muted mb-2">
-      {design.calculationMode === 'storm' && design.designRainMm != null && design.returnPeriodYears != null
-        ? t('hydrology:designStorm', {
-            years: design.returnPeriodYears,
-            mm: Math.round(design.designRainMm),
-            source,
-          })
+      {design.calculationMode === 'storm'
+        ? design.designRainMm != null && design.returnPeriodYears != null
+          ? t('hydrology:designStorm', {
+              years: design.returnPeriodYears,
+              mm: Math.round(design.designRainMm),
+              source,
+            })
+          : modeName
         : `${modeName}: ${t('hydrology:designTypicalYear')}`}
       {design.designRainLowConfidence && (
         <div className="text-nkz-warning-strong">

@@ -138,11 +138,10 @@
     "designSourceReanalysis": "reanálisis",
     "scenarioRetentionMedian": "Año típico",
     "scenarioRetentionDry": "Año seco",
-    "scenarioExtraStored": "Agua extra almacenada (m³)",
+    "scenarioExtraStored": "Agua extra retenida (m³)",
     "scenarioExtraSummerDays": "Días de verano extra con agua",
     "scenarioBaselineSummerDays": "Días de verano con agua (sin obras)",
     "scenarioNotAvailable": "Escenarios no disponibles: {{reason}}",
-    "scenarioMode": "Modo",
     "modeForbidden": "No tienes permiso para cambiar el modo de cálculo",
     "modeInvalid": "Modo o periodo de retorno no válido",
     "modeLoadFailed": "No se pudo cargar el ajuste de cálculo; se muestran los valores por defecto"
