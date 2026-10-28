@@ -11,6 +11,7 @@ Contract reference: AGENTS §8 — precedence meteo.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -53,6 +54,10 @@ class DailyWater:
 
 # Stop reading the history after this many failed years in a row (weather-api down).
 MAX_CONSECUTIVE_FAILED_YEARS = 3
+# A year of history can be slow upstream (gap filling): per-request timeout, and an
+# overall deadline so 30 slow years cannot hold the job for ever.
+HISTORY_REQUEST_TIMEOUT_S = 30.0
+HISTORY_TOTAL_DEADLINE_S = 240.0
 
 
 # Default metrics requested from weather-map /stats endpoint.
@@ -182,7 +187,8 @@ class WeatherClient:
         success resets the count).
 
         Raises:
-            WeatherUnavailable: when every year failed or the consecutive limit is hit.
+            WeatherUnavailable: when every year failed, the consecutive limit is hit or
+                ``HISTORY_TOTAL_DEADLINE_S`` elapsed (a partial history is not returned).
         """
         short = parcel_id.rsplit(":", 1)[-1]
         url = f"{self._daily}/api/weather/parcel/{short}/daily"
@@ -190,10 +196,17 @@ class WeatherClient:
         failed = 0
         consecutive = 0
         years = list(range(first_year, last_year + 1))
+        started = time.monotonic()
         for year in years:
+            if time.monotonic() - started > HISTORY_TOTAL_DEADLINE_S:
+                logger.error("daily history deadline of %.0f s exceeded at year=%s tenant=%s parcel=%s",
+                             HISTORY_TOTAL_DEADLINE_S, year, tenant_id, short)
+                raise WeatherUnavailable(
+                    f"weather-api: daily history exceeded {HISTORY_TOTAL_DEADLINE_S:.0f} s")
             params = {"start": f"{year}-01-01", "end": f"{year}-12-31", "fill": "open_meteo"}
             try:
-                resp = httpx.get(url, params=params, headers=self._headers(tenant_id), timeout=self._timeout)
+                resp = httpx.get(url, params=params, headers=self._headers(tenant_id),
+                                timeout=HISTORY_REQUEST_TIMEOUT_S)
                 if resp.status_code != 200:
                     raise WeatherUnavailable(f"weather-api {resp.status_code}: {resp.text[:200]}")
                 rows = (resp.json() or {}).get("days") or []

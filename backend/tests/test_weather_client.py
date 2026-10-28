@@ -171,3 +171,32 @@ def test_history_success_resets_the_failure_count(secret, monkeypatch):
 def test_history_empty_year_is_a_success_with_no_rows(secret, monkeypatch):
     monkeypatch.setattr(weather_client.httpx, "get", lambda *a, **k: httpx.Response(200, json={"days": []}))
     assert WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2005) == []
+
+
+def test_history_uses_a_30_s_request_timeout(secret, monkeypatch):
+    timeouts = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        timeouts.append(timeout)
+        return httpx.Response(200, json={"days": []})
+
+    monkeypatch.setattr(weather_client.httpx, "get", fake_get)
+    WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2002)
+    assert timeouts == [30.0, 30.0]
+
+
+def test_history_stops_at_the_total_deadline(secret, monkeypatch):
+    now = [1000.0]
+    seen = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen.append(params["start"][:4])
+        now[0] += 100.0  # each year takes 100 s on the fake clock
+        return httpx.Response(200, json=_year_body(params["start"][:4]))
+
+    monkeypatch.setattr(weather_client.httpx, "get", fake_get)
+    monkeypatch.setattr(weather_client.time, "monotonic", lambda: now[0])
+    with pytest.raises(WeatherUnavailable, match="exceeded"):
+        WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2030)
+    # 100 s, 200 s, 300 s elapsed: the third year still starts (200 <= 240), the fourth does not
+    assert seen == ["2001", "2002", "2003"]
