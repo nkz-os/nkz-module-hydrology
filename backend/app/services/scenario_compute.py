@@ -51,6 +51,18 @@ def _aggregate_design_capture(designs: list[dict]) -> tuple[float, int]:
     return captured, count
 
 
+def fetch_parcel_designs(orion, parcel_id: str) -> list[dict]:
+    """The parcel's saved water designs (ponds, swales, check dams); [] when unreadable."""
+    try:
+        return orion.query_entities(
+            type=_DESIGN_TYPES,
+            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
+        ) or []
+    except Exception as exc:
+        logger.warning("scenario designs query failed: %s", exc)
+        return []
+
+
 def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
     """Compute baseline vs intervention scenarios on demand."""
     orion = SyncOrionClient(tenant_id)
@@ -71,14 +83,7 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
 
     baseline = simulate_baseline(runoff_m3, sediment_t, et_m3, precip_m3)
 
-    try:
-        designs = orion.query_entities(
-            type=_DESIGN_TYPES,
-            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
-        ) or []
-    except Exception as exc:
-        logger.warning("scenario designs query failed: %s", exc)
-        designs = []
+    designs = fetch_parcel_designs(orion, parcel_id)
 
     captured_m3, designs_with_cap = _aggregate_design_capture(designs)
     capt_frac = min(1.0, captured_m3 / runoff_m3) if runoff_m3 > 0 else 0.0

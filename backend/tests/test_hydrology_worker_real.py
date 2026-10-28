@@ -47,6 +47,10 @@ def test_run_dem_pipeline_uploads_and_publishes():
                return_value=(poly, 5.0)), \
          patch("app.workers.hydrology_worker._reproject_to_utm",
                return_value=fake_dem), \
+         patch("app.workers.hydrology_worker.load_settings") as LS, \
+         patch("app.workers.hydrology_worker._design_inputs",
+               return_value={"mode": "storm", "status": "not_available", "record": {},
+                             "hyetograph": None, "season_rain_mm": None}), \
          patch("app.workers.hydrology_worker.OrionContextClient") as OCC, \
          patch("app.workers.hydrology_worker.extract_zonal_stats",
                side_effect=lambda z, *a: z):
@@ -84,6 +88,10 @@ def test_run_dem_pipeline_flat_dem_degrades():
                return_value=(poly, 5.0)), \
          patch("app.workers.hydrology_worker._reproject_to_utm",
                return_value=flat_dem), \
+         patch("app.workers.hydrology_worker.load_settings") as LS, \
+         patch("app.workers.hydrology_worker._design_inputs",
+               return_value={"mode": "storm", "status": "not_available", "record": {},
+                             "hyetograph": None, "season_rain_mm": None}), \
          patch("app.workers.hydrology_worker.OrionContextClient") as OCC, \
          patch("app.workers.hydrology_worker.extract_zonal_stats",
                side_effect=lambda z, *a: z):

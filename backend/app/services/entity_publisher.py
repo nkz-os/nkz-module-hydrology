@@ -41,6 +41,21 @@ _RECORD_METRICS: dict[str, str] = {
     # Source tracking (orion vs default) — Ronda 2.6
     "soilSource": "nkz:soilSource",
     "vegetationSource": "nkz:vegetationSource",
+    # Calculation mode and the design rain behind the numbers
+    "calculationMode": "nkz:calculationMode",
+    "returnPeriodYears": "nkz:returnPeriodYears",
+    "designRainMm": "nkz:designRainMm",
+    "designRainCiLowMm": "nkz:designRainCiLowMm",
+    "designRainCiHighMm": "nkz:designRainCiHighMm",
+    "designRainLowConfidence": "nkz:designRainLowConfidence",
+    "designRainSource": "nkz:designRainSource",
+    "designRainStatus": "nkz:designRainStatus",
+    "designRainReason": "nkz:designRainReason",
+    # Retention mode (typical and dry hydrological year)
+    "retentionStoredM3": "nkz:retentionStoredM3",
+    "retentionSummerDays": "nkz:retentionSummerDays",
+    "retentionDryStoredM3": "nkz:retentionDryStoredM3",
+    "retentionDrySummerDays": "nkz:retentionDrySummerDays",
 }
 
 _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}
@@ -115,7 +130,7 @@ def build_hydrology_record(
         attr = _RECORD_METRICS.get(metric_name)
         if attr is None or value is None or isinstance(value, (dict, list)):
             continue
-        entity[attr] = {"type": "Property", "value": value if isinstance(value, str) else float(value), "observedAt": observed_at}
+        entity[attr] = {"type": "Property", "value": value if isinstance(value, (str, bool)) else float(value), "observedAt": observed_at}
     return entity
 
 
