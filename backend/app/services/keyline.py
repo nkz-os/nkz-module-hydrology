@@ -815,6 +815,7 @@ def keyline_layout(
     max_lines: Optional[int] = None,
     min_line_m: float = DEFAULT_MIN_LINE_M,
     flow_accum: Optional[np.ndarray] = None,
+    time_budget_s: Optional[float] = None,
 ) -> dict:
     """Keylines and lines traced at the design grade across the parcel.
 
@@ -846,7 +847,8 @@ def keyline_layout(
 
     Returns {"lines": [entries], "coverage_pct": parcel % within half a
     spacing of a line, "coverage_truncated": bool (the seed limit
-    `MAX_FAILED_SEEDS` or the time budget `LAYOUT_TIME_BUDGET_S` stopped the
+    `MAX_FAILED_SEEDS` or the time budget (`time_budget_s`, default
+    `LAYOUT_TIME_BUDGET_S`) stopped the
     layout with ground left), "stopped_by": None | "seed_limit" |
     "time_budget", "failed_seeds":
     int}; entries are {geometry, direction ("keyline"|"line"), grade,
@@ -856,6 +858,7 @@ def keyline_layout(
     import time
 
     started = time.monotonic()
+    budget_s = LAYOUT_TIME_BUDGET_S if time_budget_s is None else time_budget_s
     from rasterio import features
     from shapely.ops import unary_union
 
@@ -1053,7 +1056,7 @@ def keyline_layout(
         if failures >= MAX_FAILED_SEEDS:
             stopped_by = "seed_limit"
             break
-        if time.monotonic() - started > LAYOUT_TIME_BUDGET_S:
+        if time.monotonic() - started > budget_s:
             stopped_by = "time_budget"
             break
         x, y, gen = seed

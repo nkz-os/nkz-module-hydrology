@@ -133,14 +133,48 @@ def generate_keyline(
     req: KeylineRequest,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Keypoints of the valleys in the parcel, their keylines and lines traced at grade."""
+    """Keypoints of the valleys in the parcel, their keylines and lines traced at grade.
+
+    Synchronous, bounded by the layout's default time budget. The UI uses
+    `POST /keyline/jobs`, which runs the same computation in the worker.
+    """
+    return compute_keyline(req, auth.tenant_id)
+
+
+@router.post("/keyline/jobs", status_code=202)
+def start_keyline_job(
+    req: KeylineRequest,
+    auth: AuthContext = require_auth(),
+) -> dict:
+    """Queue a keyline layout; poll `GET /jobs/{job_id}` for the result."""
+    from redis import Redis
+    from rq import Queue
+
+    from app.workers.keyline_worker import run_keyline_job
+
+    settings = get_settings()
+    queue = Queue("hydrology-processing", connection=Redis.from_url(settings.redis_url))
+    job_id = str(uuid.uuid4())
+    # The tenant goes third: /jobs scopes reads by args[2].
+    queue.enqueue(
+        run_keyline_job,
+        args=(req.parcel_id, job_id, auth.tenant_id, req.model_dump()),
+        job_id=job_id,
+        job_timeout=settings.worker_timeout,
+        result_ttl=86400,
+    )
+    return {"job_id": job_id, "status": "queued", "parcel_id": req.parcel_id}
+
+
+def compute_keyline(req: KeylineRequest, tenant_id: str, time_budget_s: float | None = None) -> dict:
+    """Keyline layout for a parcel (see `generate_keyline` for the response)."""
     from rasterio import features
     from rasterio.warp import transform_geom
     from shapely.geometry import mapping, shape
     from app.services.design_generator import download_raster
 
-    dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
-    accum = download_raster(req.parcel_id, auth.tenant_id, "accum.tif")
+    dem = download_raster(req.parcel_id, tenant_id, "breached.tif")
+    accum = download_raster(req.parcel_id, tenant_id, "accum.tif")
     if not dem or not accum:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
@@ -160,7 +194,7 @@ def generate_keyline(
             "max_cell_size_m": MAX_KEYLINE_CELL_M,
         }
 
-    parcel_wgs = _parcel_polygon(req.parcel_id, auth.tenant_id)
+    parcel_wgs = _parcel_polygon(req.parcel_id, tenant_id)
     if parcel_wgs is None:
         return {"status": "no_data", "detail": "Parcel has no polygon"}
     parcel_utm = _polygonal(shape(transform_geom("EPSG:4326", crs, mapping(parcel_wgs))))
@@ -181,13 +215,14 @@ def generate_keyline(
     result = keyline_layout(
         dem_arr, transform, parcel_mask, parcel_utm, kps, req.spacing,
         grade=req.grade, max_lines=req.lines, min_line_m=req.min_line_m, flow_accum=accum_arr,
+        time_budget_s=time_budget_s,
     )
     layout = result["lines"]
     if result["coverage_truncated"]:
         logger.warning(
             "keyline layout for parcel %s (tenant %s) stopped early (%s): "
             "%d seeds gave no guide, %d lines, spacing %.1f m, grade %.4f",
-            req.parcel_id, auth.tenant_id, result["stopped_by"], result["failed_seeds"],
+            req.parcel_id, tenant_id, result["stopped_by"], result["failed_seeds"],
             len(layout), req.spacing, req.grade,
         )
 

@@ -279,6 +279,7 @@ def test_generation_endpoints_require_auth():
 
     endpoints = [
         "/design/keyline/generate",
+        "/design/keyline/jobs",
         "/design/pond/score",
         "/design/swale/suggest",
         "/design/check-dam/suggest",
@@ -681,3 +682,84 @@ def test_keyline_dem_in_geographic_crs_is_refused():
     res = _call_keyline(out, _parcel_wgs())
     assert res["status"] == "no_data" and "projected" in res["detail"]
     assert "keyline" not in res
+
+
+def test_keyline_job_endpoint_enqueues_with_tenant_third():
+    from app.api import designs
+
+    queued = {}
+
+    class FakeQueue:
+        def __init__(self, name, connection=None):
+            queued["name"] = name
+
+        def enqueue(self, fn, args, job_id, job_timeout, result_ttl):
+            queued.update(fn=fn, args=args, job_id=job_id, timeout=job_timeout)
+
+    with patch("rq.Queue", FakeQueue), patch("redis.Redis.from_url"):
+        res = designs.start_keyline_job(
+            req=designs.KeylineRequest(parcel_id="p-1", spacing=6.0, min_line_m=50.0),
+            auth=SimpleNamespace(tenant_id="tenant-a"),
+        )
+    from app.workers.keyline_worker import run_keyline_job
+    assert res["status"] == "queued" and res["job_id"] == queued["job_id"]
+    assert queued["name"] == "hydrology-processing" and queued["fn"] is run_keyline_job
+    pid, jid, tenant, params = queued["args"]
+    assert (pid, jid, tenant) == ("p-1", res["job_id"], "tenant-a")   # /jobs scopes by args[2]
+    assert params["spacing"] == 6.0 and params["min_line_m"] == 50.0
+
+
+def _run_job(rasters, parcel, **params):
+    from app.api import designs
+    from app.services import design_generator
+    from app.workers.keyline_worker import run_keyline_job
+
+    entity = {"location": {"type": "GeoProperty", "value": parcel}} if parcel else {}
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: rasters.get(name)), \
+         patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.return_value = entity
+        return run_keyline_job("p-1", "job-1", "tenant-a", {"parcel_id": "p-1", "spacing": 6.0, **params})
+
+
+def test_keyline_job_returns_the_sync_response():
+    rasters, parcel = _valley_rasters(1.0), _parcel_wgs(size=160)
+    job = _run_job(rasters, parcel)
+    sync = _call_keyline(rasters, parcel)
+    assert job["status"] == "ok"
+    assert job["keylines"] == sync["keylines"] and job["parallel_lines"] == sync["parallel_lines"]
+
+
+def test_keyline_job_uses_the_longer_budget(monkeypatch):
+    from app.services import keyline
+
+    monkeypatch.setattr(keyline, "LAYOUT_TIME_BUDGET_S", 0.0)  # would stop the sync call at once
+    job = _run_job(_valley_rasters(1.0), _parcel_wgs(size=160))
+    assert job["status"] == "ok" and job["coverage_truncated"] is False
+
+
+def test_keyline_job_broker_failure_is_a_status_not_a_crash():
+    from app.api import designs
+    from app.services import design_generator
+    from app.workers.keyline_worker import run_keyline_job
+
+    rasters = _keyline_rasters()
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: rasters.get(name)), \
+         patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.side_effect = RuntimeError("boom")
+        res = run_keyline_job("p-1", "job-1", "tenant-a", {"parcel_id": "p-1"})
+    assert res["status"] == "orion_unavailable" and "boom" not in str(res)
+
+
+def test_keyline_job_ignores_parcel_id_in_params():
+    # The parcel comes from the job arguments, never from the stored params.
+    from app.services import design_generator
+    from app.workers.keyline_worker import run_keyline_job
+
+    seen = []
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: seen.append((pid, ten)) or None):
+        res = run_keyline_job("p-1", "job-1", "tenant-a", {"parcel_id": "p-other"})
+    assert res["status"] == "no_data"
+    assert seen and all(c == ("p-1", "tenant-a") for c in seen)
