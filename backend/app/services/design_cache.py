@@ -61,3 +61,11 @@ def get_or_compute(
     except Exception as exc:
         logger.warning("design cache write failed tenant=%s parcel=%s: %s", tenant_id, parcel_id, exc)
     return value
+
+
+def invalidate(tenant_id: str, parcel_id: str) -> None:
+    """Remove the parcel's cache document (best effort)."""
+    try:
+        get_s3_client().delete_object(Bucket=get_settings().minio_bucket, Key=_key(tenant_id, parcel_id))
+    except Exception as exc:
+        logger.warning("design cache invalidate failed tenant=%s parcel=%s: %s", tenant_id, parcel_id, exc)

@@ -226,11 +226,12 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     ls_fact = ls_from_slope(_slope_deg_to_pct(slope_mean))
     c_fact = c_from_ndvi(ndvi_mean)
     runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0 if run_mm is not None else None
-    if runoff_m3 is not None and peak_m3s is not None:
+    storm = design["mode"] == "storm"
+    if storm and runoff_m3 is not None and peak_m3s is not None:
         metrics["sedimentYieldTonnes"] = musle_sediment(runoff_m3, peak_m3s, soil.k_factor, ls_fact, c_fact)
 
-    # 4. Pond Viability
-    if runoff_m3 is not None:
+    # 4. Pond Viability (storm only: sized against a design storm)
+    if storm and runoff_m3 is not None:
         try:
             earthwork = max(100.0, runoff_m3 * 0.5)
             ps = pond_score(
@@ -290,7 +291,7 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
             bz = bucket_z.step(precip, eto, cn=soil.cn)
             zone["nkz:soilSaturationPct"] = bz["saturation_pct"]
 
-            if z_run_mm is not None:
+            if storm and z_run_mm is not None:
                 z_runoff_m3 = (z_run_mm / 1000.0) * z_area_ha * 10000.0
                 if z_peak_m3s is not None:
                     z_slope_len = max(10.0, min(200.0, (z_area_ha * 10000.0) ** 0.5))
@@ -386,10 +387,15 @@ def _merge_weather_metrics(metrics: dict, weather: ParcelWeather) -> None:
 # ── calculation modes ────────────────────────────────────────────────────────
 
 _HISTORY_YEARS = 30  # target length of the rain history (last full years)
+_RETENTION_KEY_T = 0  # the retention history does not depend on the return period
 
 
 class _DesignNotAvailable(Exception):
     """The history cannot support the design figures; never cached."""
+
+
+def _drop_cache(tenant_id: str, parcel_id: str) -> None:
+    design_cache.invalidate(tenant_id, parcel_id)
 
 
 def _history_to_json(history: list[DailyWater]) -> list[list]:
@@ -406,7 +412,7 @@ def _design_inputs(
 ) -> dict:
     """Mode-specific design figures from the rain history, cached per key.
 
-    Returns ``{"mode", "status", "record", "hyetograph", "season_rain_mm"}``. When the
+    Returns ``{"mode", "status", "record", "hyetograph", "season_runoff_mm"}``. When the
     history is missing or too short ``status`` is ``not_available`` with the reason in
     ``record``: nothing is estimated, the terrain results are still published.
     """
@@ -415,7 +421,7 @@ def _design_inputs(
     if mode == "storm":
         record["returnPeriodYears"] = settings.return_period_years
     out: dict = {"mode": mode, "status": "not_available", "record": record,
-                 "hyetograph": None, "season_rain_mm": None}
+                 "hyetograph": None, "season_runoff_mm": None}
     last_full_year = datetime.now(timezone.utc).year - 1
 
     def _fetch() -> list[DailyWater]:
@@ -441,7 +447,11 @@ def _design_inputs(
 
             cached = design_cache.get_or_compute(
                 tenant_id, parcel_id, mode, settings.return_period_years, last_full_year, _compute)
-            depth = DesignDepth(**cached)
+            try:
+                depth = DesignDepth(**cached)
+            except (TypeError, ValueError) as exc:
+                logger.warning("[%s] malformed design cache, recomputing: %s", job_id, exc)
+                depth = DesignDepth(**_compute())
             record.update({
                 "designRainStatus": "ok",
                 "designRainMm": depth.depth_mm,
@@ -452,14 +462,28 @@ def _design_inputs(
             })
             out["hyetograph"] = alternating_block_hyetograph(depth.depth_mm)
         else:
-            def _compute() -> dict:
-                return {"history": _history_to_json(_fetch())}
+            def _load(use_cache: bool) -> RetentionResult:
+                def _compute() -> dict:
+                    return {"history": _history_to_json(_fetch())}
 
-            cached = design_cache.get_or_compute(
-                tenant_id, parcel_id, mode, settings.return_period_years, last_full_year, _compute)
-            designs = fetch_parcel_designs(SyncOrionClient(tenant_id), parcel_id)
-            res = simulate_retention(_history_from_json(cached["history"]), soil, designs, area_ha)
+                if use_cache:
+                    cached = design_cache.get_or_compute(
+                        tenant_id, parcel_id, mode, _RETENTION_KEY_T, last_full_year, _compute)
+                else:
+                    cached = _compute()
+                history = _history_from_json(cached["history"])
+                with SyncOrionClient(tenant_id) as orion:
+                    designs = fetch_parcel_designs(orion, parcel_id)
+                return simulate_retention(history, soil, designs, area_ha)
+
+            try:
+                res = _load(True)
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                logger.warning("[%s] malformed history cache, refetching: %s", job_id, exc)
+                res = _load(False)
             if res.status != "ok":
+                # a gappy history must not stick in the cache until next year
+                _drop_cache(tenant_id, parcel_id)
                 raise _DesignNotAvailable(res.reason or "retention not available")
             record.update({
                 "designRainStatus": "ok",
@@ -469,9 +493,12 @@ def _design_inputs(
                 "retentionDryStoredM3": res.dry.stored_m3,
                 "retentionDrySummerDays": res.dry.summer_days_above_threshold,
             })
-            out["season_rain_mm"] = res.median.season_rain_mm
+            out["season_runoff_mm"] = res.median.season_runoff_mm
     except _DesignNotAvailable as exc:
         return _unavailable(str(exc))
+    except Exception as exc:
+        logger.exception("[%s] design computation failed", job_id)
+        return _unavailable(f"design computation failed: {type(exc).__name__}")
     out["status"] = "ok"
     return out
 
@@ -479,14 +506,14 @@ def _design_inputs(
 def _mode_runoff(design: dict, cn: float, area_ha: float, tc_h: float) -> tuple[float | None, float | None]:
     """``(runoff_mm, peak_m3s)`` for the calculation mode; ``None`` when not available.
 
-    Storm: design hyetograph through the unit hydrograph. Retention: SCS-CN depth of the
-    median year's season rain; no peak flow (not meaningful for a seasonal total).
+    Storm: design hyetograph through the unit hydrograph. Retention: the
+    median year's summed daily runoff; no peak flow (not meaningful for a seasonal total).
     """
     if design["status"] != "ok":
         return None, None
     if design["mode"] == "storm":
         return design_storm_response(design["hyetograph"], cn, area_ha, tc_h)
-    return runoff(design["season_rain_mm"], cn, area_ha=area_ha, tc_h=tc_h)[0], None
+    return design["season_runoff_mm"], None
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

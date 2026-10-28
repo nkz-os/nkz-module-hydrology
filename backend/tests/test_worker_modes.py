@@ -55,6 +55,9 @@ class FakeS3:
         body.read.return_value = self.store[Key]
         return {"Body": body}
 
+    def delete_object(self, Bucket, Key):
+        self.store.pop(Key, None)
+
     def put_object(self, Bucket, Key, Body, ContentType=None):
         self.store[Key] = Body
 
@@ -73,6 +76,7 @@ def _run(settings, history=None, history_exc=None, s3=None, designs=None):
         st.enter_context(patch("app.workers.hydrology_worker._upload_results"))
         st.enter_context(patch("app.workers.hydrology_worker.extract_zonal_stats", side_effect=lambda z, *a: z))
         st.enter_context(patch("app.workers.hydrology_worker.load_settings", return_value=settings))
+        st.enter_context(patch("app.workers.hydrology_worker.SyncOrionClient"))
         st.enter_context(patch("app.workers.hydrology_worker.fetch_parcel_designs", return_value=designs or []))
         st.enter_context(patch("app.services.design_cache.get_s3_client", return_value=s3))
         occ = st.enter_context(patch("app.workers.hydrology_worker.OrionContextClient"))
@@ -132,6 +136,8 @@ def test_retention_mode_publishes_retention_fields():
     assert _val(record, "calculationMode") == "retention"
     assert "nkz:returnPeriodYears" not in record
     assert _val(record, "designRainStatus") == "ok"
+    for gone in ("peakFlowM3s", "sedimentYieldTonnes", "pondViability"):
+        assert f"nkz:{gone}" not in record
     for name in ("retentionStoredM3", "retentionSummerDays",
                  "retentionDryStoredM3", "retentionDrySummerDays", "runoffMm"):
         assert f"nkz:{name}" in record, name
@@ -188,3 +194,59 @@ def test_cache_key_changes_with_return_period():
     assert (a, b, c, d, e) == ({"tag": "a"}, {"tag": "b"}, {"tag": "b"}, {"tag": "d"}, {"tag": "e"})
     assert calls == ["a", "b", "d", "e"]
     assert any(k.endswith("/p-1/design_cache.json") for k in s3.store)
+
+
+def test_retention_runoff_is_median_year_summed_daily_runoff():
+    from app.services.bucket_model import BucketModel
+    from app.services.design_rain import _hydro_year
+    from app.services.orion_context_client import SoilContext
+
+    hist = _hist()
+    soil = SoilContext()
+    by_year = {}
+    for d in hist:
+        by_year.setdefault(_hydro_year(d.day), []).append(d)
+    complete = {y: v for y, v in by_year.items() if len(v) >= 360}
+    ranked = sorted((sum(i.precip_mm for i in v), y) for y, v in complete.items())
+    import math
+    median_year = ranked[max(1, math.ceil(0.5 * len(ranked))) - 1][1]
+    b = BucketModel(soil.ksat_mmh, soil.field_capacity_vv, soil.wilting_point_vv)
+    expected = sum(b.step(i.precip_mm, i.et0_mm, cn=soil.cn)["runoff"] for i in complete[median_year])
+    _, record, zones, _ = _run(_settings("retention", 10), history=hist)
+    assert expected > 0
+    assert _val(record, "runoffMm") == pytest.approx(expected)
+    assert all("nkz:peakFlowM3s" not in z and "nkz:sedimentYieldTonnes" not in z
+               and "nkz:pondViability" not in z for z in zones)
+
+
+def test_retention_short_history_not_cached_and_t_not_in_key():
+    s3 = FakeS3()
+    last = date.today().year - 1
+    _, record, _, _ = _run(_settings("retention", 10), history=_history(last - 5, last), s3=s3)
+    assert _val(record, "designRainStatus") == "not_available"
+    assert not s3.store  # gappy history does not stick
+    _, _, _, c1 = _run(_settings("retention", 10), history=_hist(), s3=s3)
+    _, _, _, c2 = _run(_settings("retention", 100), history=_hist(), s3=s3)
+    assert c1.fetch_daily_history.call_count == 1
+    assert c2.fetch_daily_history.call_count == 0
+
+
+def test_malformed_cache_is_a_miss():
+    s3 = FakeS3()
+    _run(_settings("storm", 10), history=_hist(), s3=s3)
+    (k,) = s3.store
+    doc = json.loads(s3.store[k])
+    doc["value"] = {"unexpected": 1}
+    s3.store[k] = json.dumps(doc).encode()
+    _, record, _, client = _run(_settings("storm", 10), history=_hist(), s3=s3)
+    assert client.fetch_daily_history.call_count == 1
+    assert _val(record, "designRainStatus") == "ok"
+
+
+def test_unexpected_error_degrades_to_not_available():
+    with patch("app.workers.hydrology_worker.design_depth_24h", side_effect=RuntimeError("boom")):
+        result, record, zones, _ = _run(_settings("storm", 10), history=_hist())
+    assert result["status"] == "done"
+    assert _val(record, "designRainStatus") == "not_available"
+    assert "RuntimeError" in _val(record, "designRainReason")
+    assert "nkz:runoffMm" not in record and len(zones) > 0

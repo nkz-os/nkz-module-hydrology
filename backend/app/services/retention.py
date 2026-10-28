@@ -38,6 +38,7 @@ class RetentionYear:
     summer_days_above_threshold: int
     extra_m3_vs_baseline: float
     extra_days_vs_baseline: int
+    season_runoff_mm: float  # summed daily runoff, October-September, no designs
 
 
 @dataclass(frozen=True)
@@ -76,11 +77,12 @@ def _total_capacity(designs: list[dict]) -> float:
     return total
 
 
-def _simulate_year(days, soil, capacity_m3: float, area_m2: float) -> tuple[float, int]:
-    """Returns (stored_m3 Oct-Mar, summer days April-Sep at/above threshold)."""
+def _simulate_year(days, soil, capacity_m3: float, area_m2: float) -> tuple[float, int, float]:
+    """Returns (stored_m3 Oct-Mar, summer days Apr-Sep at/above threshold, summed daily runoff mm)."""
     bucket = BucketModel(soil.ksat_mmh, soil.field_capacity_vv, soil.wilting_point_vv)
     stored = 0.0
     summer = 0
+    runoff_total = 0.0
     for item in days:
         p = float(item.precip_mm) if _finite(item.precip_mm) else 0.0
         et0 = float(item.et0_mm) if _finite(item.et0_mm) else 0.0
@@ -91,9 +93,10 @@ def _simulate_year(days, soil, capacity_m3: float, area_m2: float) -> tuple[floa
             if item.day.month in _STORAGE_MONTHS:
                 stored += captured_m3
         r = bucket.step(p, et0, cn=soil.cn)
+        runoff_total += r["runoff"]
         if 4 <= item.day.month <= 9 and r["saturation_pct"] >= SUMMER_THRESHOLD_PCT:
             summer += 1
-    return stored, summer
+    return stored, summer, runoff_total
 
 
 def _pick(ranked: list[tuple[float, int]], p: float) -> int:
@@ -118,14 +121,15 @@ def simulate_retention(history: list[DailyWater], soil, designs: list[dict], are
     ranked = sorted((r, y) for y, r in rain.items())
 
     def build(year: int) -> RetentionYear:
-        base_stored, base_days = _simulate_year(years[year], soil, 0.0, area_m2)
-        stored, days_above = _simulate_year(years[year], soil, capacity, area_m2)
+        base_stored, base_days, base_runoff = _simulate_year(years[year], soil, 0.0, area_m2)
+        stored, days_above, _ = _simulate_year(years[year], soil, capacity, area_m2)
         return RetentionYear(
             season_rain_mm=rain[year],
             stored_m3=stored,
             summer_days_above_threshold=days_above,
             extra_m3_vs_baseline=stored - base_stored,
             extra_days_vs_baseline=days_above - base_days,
+            season_runoff_mm=base_runoff,
         )
 
     return RetentionResult("ok", None, build(_pick(ranked, 0.5)), build(_pick(ranked, DRY_PERCENTILE)), n)
