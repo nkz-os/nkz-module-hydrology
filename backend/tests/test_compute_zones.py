@@ -111,3 +111,43 @@ def test_compute_zones_geometry_stays_under_the_payload_budget():
         assert len(json.dumps(z["geometry"])) <= MAX_ZONE_GEOMETRY_BYTES
         x, y = _first_xy(z["geometry"]["coordinates"])
         assert round(x, 6) == x and round(y, 6) == y
+
+
+def test_compute_zones_geometry_is_valid_for_the_broker():
+    # The broker's geo index refuses self-crossing rings ("Loop is not valid"):
+    # simplification and coordinate rounding must still leave valid polygons.
+    from shapely.geometry import shape
+    from shapely.validation import explain_validity
+
+    rng = np.random.default_rng(11)
+    grid = rng.normal(8.0, 2.0, size=(400, 400))
+    for z in _compute_zones({"twi.tif": _twi_tif(grid, pixel=0.5)}):
+        geom = shape(z["geometry"])
+        assert geom.is_valid, explain_validity(geom)
+        assert geom.geom_type in ("Polygon", "MultiPolygon")
+        assert geom.area > 0
+
+
+def test_broker_geometry_repairs_the_ring_the_broker_refused():
+    # Ring copied from the broker's "Loop is not valid ... Edges 0 and 4 cross" error.
+    from shapely.geometry import Polygon, shape
+
+    from app.workers.hydrology_worker import _broker_geometry
+
+    bad = Polygon([(-2.091478, 42.63319), (-2.091472, 42.633204), (-2.091472, 42.63319),
+                   (-2.091447, 42.633195), (-2.091399, 42.633185), (-2.09149, 42.633191)])
+    assert not bad.is_valid
+    out = _broker_geometry(bad)
+    geom = shape(out)
+    assert geom.is_valid and geom.area > 0
+    x, y = _first_xy(out["coordinates"])
+    assert round(x, 6) == x and round(y, 6) == y
+
+
+def test_broker_geometry_drops_collapsed_parts():
+    from shapely.geometry import Polygon
+
+    from app.workers.hydrology_worker import _broker_geometry
+
+    sliver = Polygon([(0, 0), (1e-8, 0), (1e-8, 1e-8), (0, 1e-8)])
+    assert _broker_geometry(sliver) == {}
