@@ -9,6 +9,144 @@ from rasterio.transform import Affine
 from typing import Optional
 
 
+# A valley is a connected set of in-parcel cells whose flow accumulation is at
+# least this fraction of the largest in-parcel accumulation (and the cell floor
+# below), so a bigger neighbouring catchment outside the parcel never hides it.
+VALLEY_ACCUM_FRACTION = 0.1
+VALLEY_MIN_ACCUM_CELLS = 5
+# Valleys whose floor drops less than this (m) between their upstream end and
+# outlet inside the parcel are flats or noise, not a drainage line to key on.
+MIN_VALLEY_RELIEF_M = 1.0
+# Minimum grade difference (upstream steeper than downstream) for a floor slope
+# break to count as a keypoint (convex -> concave transition).
+MIN_SLOPE_BREAK = 0.01
+
+_NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
+
+
+def _d8_target(dem: np.ndarray, r: int, c: int) -> Optional[tuple]:
+    """Steepest-descent neighbour of (r, c), or None (pit, flat or edge)."""
+    ny, nx = dem.shape
+    best, best_slope = None, 0.0
+    for dr, dc in _NEIGHBOURS:
+        rr, cc = r + dr, c + dc
+        if not (0 <= rr < ny and 0 <= cc < nx):
+            continue
+        slope = (dem[r, c] - dem[rr, cc]) / math.hypot(dr, dc)
+        if slope > best_slope:
+            best, best_slope = (rr, cc), slope
+    return best
+
+
+def _valley_floor_path(dem, flow_accum, mask, start):
+    """Walk the D8 flow path upstream from `start`, following the largest
+    accumulation among in-parcel cells that drain into the current cell."""
+    ny, nx = dem.shape
+    path = [start]
+    seen = {start}
+    r, c = start
+    while True:
+        best, best_acc = None, -1.0
+        for dr, dc in _NEIGHBOURS:
+            rr, cc = r + dr, c + dc
+            if not (0 <= rr < ny and 0 <= cc < nx) or (rr, cc) in seen:
+                continue
+            if not mask[rr, cc] or _d8_target(dem, rr, cc) != (r, c):
+                continue
+            if flow_accum[rr, cc] > best_acc:
+                best, best_acc = (rr, cc), float(flow_accum[rr, cc])
+        if best is None:
+            return path
+        path.append(best)
+        seen.add(best)
+        r, c = best
+
+
+def _slope_break_index(dem, path, cell_size) -> Optional[int]:
+    """Index in `path` (outlet first) of the largest convex->concave break:
+    grade upstream of it exceeds grade downstream of it."""
+    n = len(path)
+    w = max(3, n // 5)
+    if n < 2 * w + 1:
+        return None
+    z = np.array([dem[r, c] for r, c in path], dtype=float)
+    steps = [math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1])
+             for i in range(n - 1)]
+    d = np.concatenate([[0.0], np.cumsum(steps)]) * cell_size
+    best, best_delta = None, MIN_SLOPE_BREAK
+    for k in range(w, n - w):
+        up = (z[k + w] - z[k]) / (d[k + w] - d[k])
+        down = (z[k] - z[k - w]) / (d[k] - d[k - w])
+        if up - down > best_delta:
+            best, best_delta = k, up - down
+    return best
+
+
+def _components(binary: np.ndarray) -> list:
+    """8-connected components of a boolean array, each an (n, 2) row/col array."""
+    ny, nx = binary.shape
+    seen = np.zeros_like(binary, dtype=bool)
+    out = []
+    for r0, c0 in np.argwhere(binary):
+        if seen[r0, c0]:
+            continue
+        stack, cells = [(int(r0), int(c0))], []
+        seen[r0, c0] = True
+        while stack:
+            r, c = stack.pop()
+            cells.append((r, c))
+            for dr, dc in _NEIGHBOURS:
+                rr, cc = r + dr, c + dc
+                if 0 <= rr < ny and 0 <= cc < nx and binary[rr, cc] and not seen[rr, cc]:
+                    seen[rr, cc] = True
+                    stack.append((rr, cc))
+        out.append(np.array(cells))
+    return out
+
+
+def detect_keypoints(
+    dem: np.ndarray,
+    transform: Affine,
+    flow_accum: np.ndarray,
+    parcel_mask: np.ndarray,
+    max_valleys: int = 3,
+) -> list:
+    """Keypoints of the valleys inside the parcel, main valley first.
+
+    Valleys come from `flow_accum` restricted to `parcel_mask`; each keypoint
+    is the slope break on the valley floor profile, walked upstream along the
+    D8 path from the valley's lowest in-parcel cell. Coordinates are in the
+    DEM CRS (cell centres).
+    """
+    mask = np.asarray(parcel_mask, dtype=bool)
+    if not mask.any():
+        return []
+    acc = np.where(mask, flow_accum, 0)
+    threshold = max(VALLEY_MIN_ACCUM_CELLS, VALLEY_ACCUM_FRACTION * float(acc.max()))
+    valley = acc >= threshold
+    if not valley.any():
+        return []
+    components = _components(valley)
+    cell_size = abs(transform.a)
+    found = []
+    for cells in components:
+        zs = dem[cells[:, 0], cells[:, 1]]
+        low = cells[int(np.argmin(zs))]
+        path = _valley_floor_path(dem, flow_accum, mask, (int(low[0]), int(low[1])))
+        floor = [dem[r, c] for r, c in path]
+        if max(floor) - min(floor) < MIN_VALLEY_RELIEF_M:
+            continue
+        k = _slope_break_index(dem, path, cell_size)
+        if k is None:
+            continue
+        row, col = path[k]
+        x, y = transform @ (col + 0.5, row + 0.5)
+        found.append({"row": row, "col": col, "x": float(x), "y": float(y),
+                      "z": float(dem[row, col]), "valley_cells": int(len(cells))})
+    found.sort(key=lambda k: k["valley_cells"], reverse=True)
+    return found[:max_valleys]
+
+
 def detect_keyline(
     dem: np.ndarray,
     transform: Affine,

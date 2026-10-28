@@ -64,3 +64,59 @@ def test_keyline_length_is_euclidean(natural_valley):
     actual_m = result["properties"]["length_m"]
     assert actual_m == pytest.approx(expected_m, rel=0.01), \
         f"length_m={actual_m} but euclidean={expected_m}"
+
+
+def _valley_dem(size=80, cols=(40,), brk=40):
+    """Floor falls south: steep above row `brk`, gentle below; V cross-section."""
+    i = np.arange(size)[:, None].astype(float)
+    floor = np.where(i <= brk, 120 - 0.5 * i, 120 - 0.5 * brk - 0.05 * (i - brk))
+    j = np.arange(size)[None, :].astype(float)
+    cross = np.min([np.abs(j - c) for c in cols], axis=0) * 0.5
+    return (floor + cross).astype(np.float32)
+
+
+def _accum(size, cols, lengths):
+    a = np.zeros((size, size), dtype=np.float32)
+    for c, n in zip(cols, lengths):
+        for i in range(size):
+            a[i, c] = n - i * n / size
+    return a
+
+
+TF = from_origin(600000, 4700000, 1.0, 1.0)
+
+
+def test_keypoint_on_synthetic_valley():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem()
+    kps = detect_keypoints(dem, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool))
+    assert len(kps) == 1
+    assert abs(kps[0]["row"] - 40) <= 2 and abs(kps[0]["col"] - 40) <= 2
+    assert kps[0]["valley_cells"] > 0
+
+
+def test_keypoints_ignore_buffer_outside_parcel():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem(cols=(40, 10))
+    accum = _accum(80, (40, 10), (80, 500))  # biggest accumulation outside the parcel
+    mask = np.ones((80, 80), bool)
+    mask[:, :25] = False
+    kps = detect_keypoints(dem, TF, accum, mask)
+    assert kps
+    assert all(mask[k["row"], k["col"]] for k in kps)
+
+
+def test_two_valleys_two_keypoints_main_first():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem(cols=(20, 60))
+    accum = _accum(80, (20, 60), (40, 80))
+    kps = detect_keypoints(dem, TF, accum, np.ones((80, 80), bool))
+    assert len(kps) == 2
+    assert kps[0]["valley_cells"] >= kps[1]["valley_cells"]
+    assert abs(kps[0]["col"] - 60) <= 2 and abs(kps[1]["col"] - 20) <= 2
+
+
+def test_flat_dem_no_keypoint():
+    from app.services.keyline import detect_keypoints
+    flat = np.full((80, 80), 100.0, dtype=np.float32)
+    assert detect_keypoints(flat, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool)) == []
