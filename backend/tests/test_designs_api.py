@@ -463,3 +463,43 @@ def test_keyline_all_coordinates_inside_parcel():
     assert geoms
     for g in geoms:
         assert poly.covers(shape(g))
+
+
+def test_keyline_clipped_to_offgrid_parcel():
+    from shapely.geometry import shape
+    for margin in (5.2, 5.37, 5.5, 5.63, 5.8):  # polygon edges not cell aligned
+        parcel = _parcel_wgs(margin=margin)
+        res = _call_keyline(_keyline_rasters(), parcel)
+        assert res["status"] == "ok"
+        poly = shape(parcel).buffer(1e-6)
+        geoms = [res["keyline"]] + res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]
+        for g in geoms:
+            assert poly.covers(shape(g)), margin
+
+
+def test_keyline_orion_failure_is_502_not_no_data():
+    from fastapi import HTTPException
+    from app.api import designs
+    from app.services import design_generator
+
+    rasters = _keyline_rasters()
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: rasters.get(name)), \
+         patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.side_effect = RuntimeError("boom")
+        with pytest.raises(HTTPException) as exc:
+            designs.generate_keyline(
+                req=designs.KeylineRequest(parcel_id="p-1"),
+                auth=SimpleNamespace(tenant_id="tenant-a"),
+            )
+    assert exc.value.status_code == 502
+    assert exc.value.detail["status"] == "orion_unavailable"
+    assert "boom" not in str(exc.value.detail)
+
+
+def test_keyline_request_rejects_invalid_inputs():
+    from pydantic import ValidationError
+    from app.api.designs import KeylineRequest
+    for bad in ({"spacing": 0}, {"grade": -0.1}, {"lines": -1}):
+        with pytest.raises(ValidationError):
+            KeylineRequest(parcel_id="p-1", **bad)

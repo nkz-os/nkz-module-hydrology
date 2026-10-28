@@ -14,7 +14,7 @@ import httpx
 import rasterio
 from pyproj import Transformer
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from nkz_platform_sdk import SyncOrionClient, AuthContext, inject_fiware_headers
 
 from app.config import get_settings
@@ -26,7 +26,7 @@ from app.services.design_generator import (
 )
 from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
 from app.services.hydro_record import nkz_attr
-from app.services.keyline import detect_keyline, detect_keypoints, keyline_pattern, trace_keyline
+from app.services.keyline import MIN_SEGMENT_M, detect_keyline, detect_keypoints, keyline_pattern, trace_keyline
 from app.services.pond_score import pond_score
 from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
 from app.services.compliance import requires_water_permit, breach_risk_class, PERMIT_THRESHOLDS_M3
@@ -40,9 +40,9 @@ router = APIRouter(prefix="/design", tags=["hydrology-designs"])
 
 class KeylineRequest(BaseModel):
     parcel_id: str
-    grade: float = 0.005
-    spacing: float = 12.0
-    lines: int | None = None  # None = cover the parcel
+    grade: float = Field(0.005, gt=0)
+    spacing: float = Field(12.0, gt=0)
+    lines: int | None = Field(None, ge=0)  # None = cover the parcel
 
 
 class PondScoreRequest(BaseModel):
@@ -85,14 +85,20 @@ MAX_KEYLINE_CELL_M = 5.0
 
 
 def _parcel_polygon(parcel_id: str, tenant_id: str):
-    """Parcel polygon (WGS84 shapely geometry) from Orion, or None."""
+    """Parcel polygon (WGS84 shapely geometry) from Orion, or None if it has none.
+
+    Raises HTTP 502 when the broker cannot be read.
+    """
     from shapely.geometry import shape
 
     try:
         ent = SyncOrionClient(tenant_id).get_entity(parcel_id)
-    except Exception as exc:  # noqa: BLE001 - reported as no_data
+    except Exception as exc:  # noqa: BLE001
         logger.warning("parcel %s: Orion read failed: %s", parcel_id, type(exc).__name__)
-        return None
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "orion_unavailable", "detail": "Parcel could not be read from the broker"},
+        )
     loc = (ent or {}).get("location")
     geom = loc.get("value") if isinstance(loc, dict) and "value" in loc else loc
     if not isinstance(geom, dict) or geom.get("type") not in ("Polygon", "MultiPolygon"):
@@ -110,6 +116,7 @@ def generate_keyline(
     auth: AuthContext = require_auth(),
 ) -> dict:
     """Keypoints of the valleys in the parcel, keylines and parallels covering it."""
+    import shapely
     from rasterio import features
     from rasterio.warp import transform_geom
     from shapely.geometry import mapping, shape
@@ -157,7 +164,28 @@ def generate_keyline(
         {"type": "Point", "coordinates": _to_wgs84([kp["x"], kp["y"], kp["z"]], crs)}
         for kp in kps
     ]
-    keyline_geoms = [_line_wgs(g) for g in keylines if not g.is_empty]
+    # trace_keyline stops at the rasterised mask edge; clip to the polygon.
+    def _pieces(g) -> list:
+        if g.is_empty:
+            return []
+        if parcel_utm.buffer(1e-6).covers(g):
+            return [g] if g.length >= MIN_SEGMENT_M else []
+        clipped = g.intersection(parcel_utm)
+        if clipped.geom_type == "MultiLineString":
+            clipped = shapely.line_merge(clipped)
+        parts = getattr(clipped, "geoms", [clipped])
+        out = []
+        for part in parts:
+            if part.geom_type == "MultiLineString":
+                out.extend(part.geoms)
+            elif part.geom_type == "LineString":
+                out.append(part)
+        return [x for x in out if x.length >= MIN_SEGMENT_M]
+
+    per_valley = [_pieces(g) for g in keylines]
+    keyline_geoms = [_line_wgs(x) for pcs in per_valley for x in pcs]
+    main_pieces = per_valley[0]
+    main_keyline = _line_wgs(max(main_pieces, key=lambda x: x.length)) if main_pieces else None
     parallels = [
         {
             "geometry": _line_wgs(p["geometry"]),
@@ -170,7 +198,7 @@ def generate_keyline(
     ]
     return {
         "keypoint": keypoints[0],
-        "keyline": keyline_geoms[0] if keyline_geoms else None,
+        "keyline": main_keyline,
         "keypoints": keypoints,
         "keylines": keyline_geoms,
         "parallel_lines": parallels,
