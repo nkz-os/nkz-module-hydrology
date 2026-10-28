@@ -36,7 +36,7 @@ from app.services.design_rain import DesignDepth, design_depth_24h
 from app.services.design_storm import SUBDAILY_SHAPE_SOURCE, alternating_block_hyetograph, design_storm_response
 from app.services.parcel_settings import ParcelSettings, load_settings
 from app.services.retention import RetentionResult, simulate_retention
-from app.services.scenario_compute import fetch_parcel_designs
+from app.services.scenario_compute import fetch_parcel_designs_strict
 from app.services.bucket_model import BucketModel
 from app.services.scs_cn import runoff
 from app.services.musle import musle_sediment, ls_from_slope, c_from_ndvi
@@ -207,8 +207,15 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     tc_h = max(0.1, min(tc_h, 24.0))  # clamp to sensible range
 
     # 1. Runoff and peak flow in the parcel's calculation mode
-    settings_ = load_settings(tenant_id or "platform", parcel_id)
-    design = _design_inputs(parcel_id, tenant_id or "platform", settings_, soil, area_ha, job_id)
+    try:
+        settings_ = load_settings(tenant_id or "platform", parcel_id)
+    except Exception:
+        # no known mode: publish none rather than a guessed one; terrain KPIs still go out
+        logger.exception("[%s] parcel settings unreadable", job_id)
+        design = {"mode": None, "status": "not_available", "hyetograph": None, "season_runoff_mm": None,
+                  "record": {"designRainStatus": "not_available", "designRainReason": "settings unreadable"}}
+    else:
+        design = _design_inputs(parcel_id, tenant_id or "platform", settings_, soil, area_ha, job_id)
     metrics.update(design["record"])
     run_mm, peak_m3s = _mode_runoff(design, soil.cn, area_ha, tc_h)
     if run_mm is not None:
@@ -472,8 +479,12 @@ def _design_inputs(
                 else:
                     cached = _compute()
                 history = _history_from_json(cached["history"])
-                with SyncOrionClient(tenant_id) as orion:
-                    designs = fetch_parcel_designs(orion, parcel_id)
+                try:
+                    with SyncOrionClient(tenant_id) as orion:
+                        designs = fetch_parcel_designs_strict(orion, parcel_id)
+                except Exception as exc:
+                    # zero designs would publish a false "no extra water": say so instead
+                    raise _DesignNotAvailable("designs unreadable") from exc
                 return simulate_retention(history, soil, designs, area_ha)
 
             try:

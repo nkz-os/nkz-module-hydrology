@@ -51,13 +51,18 @@ def _aggregate_design_capture(designs: list[dict]) -> tuple[float, int]:
     return captured, count
 
 
+def fetch_parcel_designs_strict(orion, parcel_id: str) -> list[dict]:
+    """The parcel's saved water designs (ponds, swales, check dams); raises on an Orion error."""
+    return orion.query_entities(
+        type=_DESIGN_TYPES,
+        q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
+    ) or []
+
+
 def fetch_parcel_designs(orion, parcel_id: str) -> list[dict]:
-    """The parcel's saved water designs (ponds, swales, check dams); [] when unreadable."""
+    """Lenient variant for on-demand scenarios: [] when the designs are unreadable."""
     try:
-        return orion.query_entities(
-            type=_DESIGN_TYPES,
-            q=f'(hasAgriParcel=="{parcel_id}"|refAgriParcel=="{parcel_id}")',
-        ) or []
+        return fetch_parcel_designs_strict(orion, parcel_id)
     except Exception as exc:
         logger.warning("scenario designs query failed: %s", exc)
         return []

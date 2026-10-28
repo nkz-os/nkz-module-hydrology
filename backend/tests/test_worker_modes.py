@@ -62,7 +62,8 @@ class FakeS3:
         self.store[Key] = Body
 
 
-def _run(settings, history=None, history_exc=None, s3=None, designs=None):
+def _run(settings, history=None, history_exc=None, s3=None, designs=None, designs_exc=None,
+         settings_exc=None):
     from app.services.orion_context_client import SoilContext
     from app.workers.hydrology_worker import run_dem_pipeline
 
@@ -75,9 +76,11 @@ def _run(settings, history=None, history_exc=None, s3=None, designs=None):
         st.enter_context(patch("app.workers.hydrology_worker._reproject_to_utm", return_value=_dem_bytes()))
         st.enter_context(patch("app.workers.hydrology_worker._upload_results"))
         st.enter_context(patch("app.workers.hydrology_worker.extract_zonal_stats", side_effect=lambda z, *a: z))
-        st.enter_context(patch("app.workers.hydrology_worker.load_settings", return_value=settings))
+        st.enter_context(patch("app.workers.hydrology_worker.load_settings", return_value=settings,
+                               side_effect=settings_exc))
         st.enter_context(patch("app.workers.hydrology_worker.SyncOrionClient"))
-        st.enter_context(patch("app.workers.hydrology_worker.fetch_parcel_designs", return_value=designs or []))
+        st.enter_context(patch("app.workers.hydrology_worker.fetch_parcel_designs_strict",
+                               return_value=designs or [], side_effect=designs_exc))
         st.enter_context(patch("app.services.design_cache.get_s3_client", return_value=s3))
         occ = st.enter_context(patch("app.workers.hydrology_worker.OrionContextClient"))
         wc = st.enter_context(patch("app.workers.hydrology_worker.WeatherClient"))
@@ -253,3 +256,26 @@ def test_unexpected_error_degrades_to_not_available():
     assert _val(record, "designRainStatus") == "not_available"
     assert "RuntimeError" in _val(record, "designRainReason")
     assert "nkz:runoffMm" not in record and len(zones) > 0
+
+
+def test_unreadable_designs_do_not_publish_zero_retention():
+    result, record, zones, _ = _run(_settings("retention", 10), history=_hist(),
+                                    designs_exc=RuntimeError("orion down"))
+    assert result["status"] == "done"
+    assert _val(record, "calculationMode") == "retention"
+    assert _val(record, "designRainStatus") == "not_available"
+    assert _val(record, "designRainReason") == "designs unreadable"
+    assert "nkz:retentionStoredM3" not in record and "nkz:retentionExtraStoredM3" not in record
+    assert "nkz:runoffMm" not in record and len(zones) > 0
+
+
+def test_unreadable_settings_publish_no_mode_and_terrain():
+    result, record, zones, client = _run(None, history=_hist(), settings_exc=RuntimeError("s3 down"))
+    assert result["status"] == "done"
+    assert "nkz:calculationMode" not in record
+    assert _val(record, "designRainStatus") == "not_available"
+    assert _val(record, "designRainReason") == "settings unreadable"
+    assert "nkz:runoffMm" not in record and "nkz:peakFlowM3s" not in record
+    assert _val(record, "twiMean") is not None and _val(record, "slopeMean") > 0
+    assert len(zones) > 0
+    assert client.fetch_daily_history.call_count == 0
