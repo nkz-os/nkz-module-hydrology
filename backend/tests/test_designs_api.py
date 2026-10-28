@@ -364,3 +364,320 @@ def test_score_pond_returns_compliance_block():
     assert comp["breachRisk"] == "low"
     assert comp["disclaimer"]
     assert comp["downstreamExposure"]["hasExposure"] is False
+
+
+# ── Keyline endpoint ───────────────────────────────────────────────────
+
+def _keyline_rasters(cell=1.0, size=80, flat=False):
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    tf = from_origin(600000, 4700000, cell, cell)
+    i = np.arange(size)[:, None].astype(float)
+    j = np.arange(size)[None, :].astype(float)
+    floor = np.where(i <= 40, 120 - 0.5 * i, 100 - 0.05 * (i - 40))
+    # rounded valley floor (a sharp V cannot hold a keyline within the 1.5 %
+    # line grade cap: the trace hugs the steep sides)
+    dem = np.full((size, size), 100.0) if flat else floor + 0.15 * (np.sqrt((j - 40) ** 2 + 9.0) - 3)
+    acc = np.zeros((size, size))
+    if not flat:
+        for r in range(size):
+            acc[r, 40] = 80 - r
+    out = {}
+    for name, arr in (("breached.tif", dem), ("accum.tif", acc)):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=size, width=size, count=1,
+                           dtype="float32", crs="EPSG:25830", transform=tf) as dst:
+            dst.write(arr.astype("float32"), 1)
+        out[name] = buf.getvalue()
+    return out
+
+
+def _parcel_wgs(size=80, cell=1.0, margin=5):
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+    x0, x1 = 600000 + margin, 600000 + size * cell - margin
+    y1, y0 = 4700000 - margin, 4700000 - size * cell + margin
+    ring = [t.transform(x, y) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0))]
+    return {"type": "Polygon", "coordinates": [[list(c) for c in ring]]}
+
+
+def _call_keyline(rasters, parcel=None, **req):
+    from app.api import designs
+    from app.services import design_generator
+
+    entity = {"location": {"type": "GeoProperty", "value": parcel}} if parcel else {}
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: rasters.get(name)), \
+         patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.return_value = entity
+        return designs.generate_keyline(
+            req=designs.KeylineRequest(parcel_id="p-1", spacing=6.0, **req),
+            auth=SimpleNamespace(tenant_id="tenant-a"),
+        )
+
+
+def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
+    res = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=2, min_line_m=20.0)
+    assert res["status"] == "ok"
+    assert res["keypoint"]["type"] == "Point"
+    assert res["keyline"]["type"] == "LineString"
+    assert len(res["keypoints"]) == 1 and len(res["keylines"]) == 1
+    assert res["keypoints"][0] == res["keypoint"]
+    assert res["parallel_lines"]
+    assert len(res["keylines_metrics"]) == len(res["keylines"])
+    assert set(res["keyline_metrics"]) == {"grade", "max_grade_20m"}
+    for p in res["parallel_lines"]:
+        assert set(p) == {"geometry", "grade", "max_grade_20m", "direction"}
+        assert p["direction"] == "line"
+        assert p["geometry"]["type"] == "LineString"
+        assert 0 <= p["grade"] <= p["max_grade_20m"] <= res["max_line_grade"] == 0.015
+    assert 0 < res["coverage_pct"] <= 100 and res["request"]["min_line_m"] == 20.0
+    assert res["request"]["lines"] == 2
+
+
+def test_keyline_lines_optional_covers_parcel():
+    # a 70 m parcel: lines down to 30 m (the 100 m default holds none here)
+    capped = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=1, min_line_m=30.0)
+    full = _call_keyline(_keyline_rasters(), _parcel_wgs(), min_line_m=30.0)
+    assert full["request"]["lines"] is None
+    assert len(full["parallel_lines"]) > len(capped["parallel_lines"])
+
+
+def test_keyline_refused_on_coarse_dem():
+    res = _call_keyline(_keyline_rasters(cell=25.0), _parcel_wgs(cell=25.0))
+    assert res["status"] == "terrain_too_coarse"
+    assert "keyline" not in res
+
+
+def test_keyline_no_keypoint_on_flat():
+    res = _call_keyline(_keyline_rasters(flat=True), _parcel_wgs())
+    assert res["status"] == "no_keypoint"
+
+
+def test_keyline_no_polygon_is_no_data():
+    assert _call_keyline(_keyline_rasters(), None)["status"] == "no_data"
+
+
+def test_keyline_all_coordinates_inside_parcel():
+    from shapely.geometry import shape
+    parcel = _parcel_wgs()
+    res = _call_keyline(_keyline_rasters(), parcel)
+    poly = shape(parcel).buffer(1e-6)
+    geoms = res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]
+    assert geoms
+    for g in geoms:
+        assert poly.covers(shape(g))
+
+
+def test_keyline_clipped_to_offgrid_parcel():
+    from shapely.geometry import shape
+    for margin in (5.2, 5.37, 5.5, 5.63, 5.8):  # polygon edges not cell aligned
+        parcel = _parcel_wgs(margin=margin)
+        res = _call_keyline(_keyline_rasters(), parcel)
+        assert res["status"] == "ok"
+        poly = shape(parcel).buffer(1e-6)
+        geoms = [res["keyline"]] + res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]
+        for g in geoms:
+            assert poly.covers(shape(g)), margin
+
+
+def test_keyline_orion_failure_is_502_not_no_data():
+    from fastapi import HTTPException
+    from app.api import designs
+    from app.services import design_generator
+
+    rasters = _keyline_rasters()
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: rasters.get(name)), \
+         patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.side_effect = RuntimeError("boom")
+        with pytest.raises(HTTPException) as exc:
+            designs.generate_keyline(
+                req=designs.KeylineRequest(parcel_id="p-1"),
+                auth=SimpleNamespace(tenant_id="tenant-a"),
+            )
+    assert exc.value.status_code == 502
+    assert exc.value.detail["status"] == "orion_unavailable"
+    assert "boom" not in str(exc.value.detail)
+
+
+def test_keyline_request_rejects_invalid_inputs():
+    from pydantic import ValidationError
+    from app.api.designs import KeylineRequest
+    assert KeylineRequest(parcel_id="p-1").min_line_m == 100.0
+    for bad in ({"spacing": 0}, {"grade": -0.1}, {"lines": -1}, {"min_line_m": 0}):
+        with pytest.raises(ValidationError):
+            KeylineRequest(parcel_id="p-1", **bad)
+
+
+def _valley_rasters(cell, size_m=160.0, furrow=0.0, nodata_boxes=()):
+    """Valley falling south (slope break 80 m down) as GeoTIFFs tagged with
+    nodata=-9999; `nodata_boxes` are (x0, y0, x1, y1) metre boxes from the
+    top-left corner written as nodata in both rasters."""
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    n = int(size_m / cell)
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    y, x = (i + 0.5) * cell, (j + 0.5) * cell
+    floor = np.where(y <= 80, 130 - 0.25 * y, 110 - 0.025 * (y - 80))
+    dem = floor + (np.sqrt((x - 80) ** 2 + 9.0) - 3) * 0.15 + furrow * np.sin(2 * np.pi * x)
+    acc = np.zeros((n, n))
+    acc[:, int(80 / cell)] = (np.arange(n) + 1) * 4.0
+    for x0, y0, x1, y1 in nodata_boxes:
+        sel = (x >= x0) & (x < x1) & (y >= y0) & (y < y1)
+        dem[sel] = -9999.0
+        acc[sel] = -9999.0
+    tf = from_origin(600000, 4700000, cell, cell)
+    out = {}
+    for name, arr in (("breached.tif", dem), ("accum.tif", acc)):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=n, width=n, count=1, dtype="float32",
+                           crs="EPSG:25830", transform=tf, nodata=-9999.0) as dst:
+            dst.write(arr.astype("float32"), 1)
+        out[name] = buf.getvalue()
+    return out
+
+
+def _utm(geom):
+    from pyproj import Transformer
+    from shapely.geometry import shape
+    from shapely.ops import transform
+    t = Transformer.from_crs("EPSG:4326", "EPSG:25830", always_xy=True)
+    return transform(t.transform, shape(geom))
+
+
+def test_keyline_with_nodata_gaps_inside_parcel():
+    from shapely.geometry import box, shape
+    from shapely.ops import unary_union
+    rasters = _valley_rasters(1.0, nodata_boxes=[
+        (77, 150, 83, 156),     # on the valley floor near the outlet
+        (84, 100, 90, 106),     # on the path of the east arm of the keyline
+        (0, 0, 40, 160),        # a strip wider than the fill distance
+    ])
+    parcel = _parcel_wgs(size=160)
+    res = _call_keyline(rasters, parcel, min_line_m=30.0)
+    assert res["status"] == "ok"
+    kp = _utm(res["keypoint"])
+    assert 100 < res["keypoint"]["coordinates"][2] < 140      # a real elevation
+    assert abs(kp.x - 600080) <= 4 and abs(4700000 - kp.y - 80) <= 4
+    # the keyline crosses the slope on both sides of the valley (the gap on
+    # the east arm is filled, not a cliff the trace turns back from)
+    ends = [x - 600000 for x, _ in _utm(res["keyline"]).coords[::len(_utm(res["keyline"]).coords) - 1]]
+    assert min(ends) < 75 and max(ends) > 85
+    poly = shape(parcel).buffer(1e-6)
+    geoms = res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]
+    for g in geoms:
+        assert poly.covers(shape(g))
+    lines = [_utm(g) for g in geoms]
+    area = _utm(parcel)
+    covered = unary_union([g.buffer(3.0) for g in lines]).intersection(area).area / area.area
+    assert res["coverage_pct"] == pytest.approx(100 * covered, abs=0.1)
+    # nothing over the part of the strip the fill cannot reach (> 20 m from data)
+    unfilled = box(600000, 4699840, 600015, 4700000)
+    assert not any(g.intersects(unfilled) for g in lines)
+
+
+def test_keyline_on_fine_dem_with_furrows():
+    """0.5 m terrain with plough furrows: the trace runs on the analysis grid,
+    not on the furrows."""
+    res = _call_keyline(_valley_rasters(0.5, furrow=0.08), _parcel_wgs(size=160))
+    assert res["status"] == "ok"
+    assert _utm(res["keyline"]).length > 50
+
+
+def _sharp_v_rasters(size=80):
+    """A 50 % V valley: on the 2 m analysis grid its keyline cannot hold the
+    1.5 % line cap, so the pattern is made of guides only."""
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    i = np.arange(size)[:, None].astype(float)
+    j = np.arange(size)[None, :].astype(float)
+    dem = np.where(i <= 40, 120 - 0.5 * i, 100 - 0.05 * (i - 40)) + 0.5 * np.abs(j - 40)
+    acc = np.zeros((size, size))
+    acc[:, 40] = 80 - np.arange(size)
+    out = {}
+    for name, arr in (("breached.tif", dem), ("accum.tif", acc)):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=size, width=size, count=1, dtype="float32",
+                           crs="EPSG:25830", transform=from_origin(600000, 4700000, 1.0, 1.0)) as dst:
+            dst.write(arr.astype("float32"), 1)
+        out[name] = buf.getvalue()
+    return out
+
+
+def test_keyline_ok_without_keyline_but_with_lines():
+    res = _call_keyline(_sharp_v_rasters(), _parcel_wgs(), min_line_m=20.0)
+    assert res["status"] == "ok"
+    assert res["keyline"] is None and res["keylines"] == [] and res["keyline_metrics"] is None
+    assert res["keypoint"]["type"] == "Point"
+    assert any(p["direction"] == "line" for p in res["parallel_lines"])
+    assert res["coverage_truncated"] is False
+
+
+def test_keyline_reports_and_logs_truncated_coverage(monkeypatch, caplog):
+    import logging
+    from app.services import keyline
+
+    for limit, value, reason in (("MAX_FAILED_SEEDS", 0, "seed_limit"),
+                                 ("LAYOUT_TIME_BUDGET_S", 0.0, "time_budget")):
+        with monkeypatch.context() as m:
+            m.setattr(keyline, limit, value)
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="app.api.designs"):
+                res = _call_keyline(_valley_rasters(1.0), _parcel_wgs(size=160))
+        assert res["status"] == "ok" and res["coverage_truncated"] is True
+        assert "stopped_by" not in res                  # response contract unchanged
+        assert any(reason in r.getMessage() and "p-1" in r.getMessage() for r in caplog.records)
+
+
+def test_keyline_self_crossing_parcel_with_nodata_is_made_valid():
+    """A parcel ring that crosses itself (a bow-tie at its south end) over a
+    DEM with nodata gaps is made valid instead of failing."""
+    import shapely
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+    corners = ((5, 5), (155, 5), (155, 130), (5, 155), (155, 155), (5, 130), (5, 5))
+    ring = [t.transform(600000 + x, 4700000 - y) for x, y in corners]
+    parcel = {"type": "Polygon", "coordinates": [[list(c) for c in ring]]}
+    rasters = _valley_rasters(1.0, nodata_boxes=[(84, 100, 90, 106), (0, 0, 40, 160)])
+    res = _call_keyline(rasters, parcel, min_line_m=30.0)
+    assert res["status"] == "ok"
+    valid = shapely.make_valid(_utm(parcel)).buffer(1e-3)
+    for g in res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]:
+        assert valid.covers(_utm(g))
+    assert 0 < res["coverage_pct"] <= 100
+
+
+def test_keyline_parcel_without_area_is_no_data():
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+    ring = [t.transform(x, y) for x, y in ((600010, 4699900), (600100, 4699900), (600010, 4699900))]
+    parcel = {"type": "Polygon", "coordinates": [[list(c) for c in ring + ring[:1]]]}
+    res = _call_keyline(_keyline_rasters(), parcel)
+    assert res["status"] == "no_data"
+
+
+def test_keyline_dem_in_geographic_crs_is_refused():
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    out = {}
+    for name in ("breached.tif", "accum.tif"):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=40, width=40, count=1, dtype="float32",
+                           crs="EPSG:4326", transform=from_origin(-1.6, 42.8, 1e-5, 1e-5)) as dst:
+            dst.write(np.arange(1600, dtype="float32").reshape(40, 40), 1)
+        out[name] = buf.getvalue()
+    res = _call_keyline(out, _parcel_wgs())
+    assert res["status"] == "no_data" and "projected" in res["detail"]
+    assert "keyline" not in res

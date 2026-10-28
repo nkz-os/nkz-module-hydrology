@@ -102,19 +102,47 @@ export interface KeylineRequest {
   parcel_id: string;
   grade: number;
   spacing: number;
-  lines: number;
+  /** Rows of lines seeded out from the keylines; omitted or null = as far as the terrain allows. */
+  lines?: number | null;
+  /** Traced lines shorter than this (m) are dropped; default 100. */
+  min_line_m?: number;
+}
+
+export type KeylineStatus = 'ok' | 'no_data' | 'no_keypoint' | 'terrain_too_coarse';
+
+export interface KeylineLineGrade {
+  grade: number;
+  max_grade_20m: number;
 }
 
 export interface KeylineResponse {
-  keypoint: { type: 'Point'; coordinates: number[] };
-  keyline: { type: 'LineString'; coordinates: number[][] };
-  parallel_lines: Array<{
+  status: KeylineStatus;
+  keypoint: { type: 'Point'; coordinates: number[] } | null;
+  keyline: { type: 'LineString'; coordinates: number[][] } | null;
+  keypoints?: Array<{ type: 'Point'; coordinates: number[] }>;
+  keylines?: Array<{ type: 'LineString'; coordinates: number[][] }>;
+  /** Measured grade of `keyline` and of each entry of `keylines` (same order). */
+  keyline_metrics?: KeylineLineGrade | null;
+  keylines_metrics?: KeylineLineGrade[];
+  parallel_lines?: Array<{
     geometry: { type: 'LineString'; coordinates: number[][] };
+    /** Measured mean fall along the line (fraction, 0.005 = 0.5 %). */
     grade: number;
-    direction: 'up' | 'down';
+    /** Largest fall over any 20 m of the line; never above max_line_grade. */
+    max_grade_20m?: number;
+    /** 'line': traced on the terrain at the design grade, about one spacing from its neighbours. */
+    direction: 'line';
   }>;
-  request: KeylineRequest;
-  status: string;
+  /** Cap on max_grade_20m of every line (fraction). */
+  max_line_grade?: number;
+  /** True when the layout stopped at its seed limit with ground left uncovered. */
+  coverage_truncated?: boolean;
+  /** Share of the parcel within half a spacing of a line (%). */
+  coverage_pct?: number;
+  request?: KeylineRequest;
+  /** Present when status is terrain_too_coarse. */
+  cell_size_m?: number;
+  max_cell_size_m?: number;
 }
 
 export interface PondScoreRequest {

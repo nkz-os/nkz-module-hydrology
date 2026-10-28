@@ -64,3 +64,668 @@ def test_keyline_length_is_euclidean(natural_valley):
     actual_m = result["properties"]["length_m"]
     assert actual_m == pytest.approx(expected_m, rel=0.01), \
         f"length_m={actual_m} but euclidean={expected_m}"
+
+
+def _valley_dem(size=80, cols=(40,), brk=40):
+    """Floor falls south: steep above row `brk`, gentle below; V cross-section."""
+    i = np.arange(size)[:, None].astype(float)
+    floor = np.where(i <= brk, 120 - 0.5 * i, 120 - 0.5 * brk - 0.05 * (i - brk))
+    j = np.arange(size)[None, :].astype(float)
+    cross = np.min([np.abs(j - c) for c in cols], axis=0) * 0.5
+    return (floor + cross).astype(np.float32)
+
+
+def _accum(size, cols, lengths):
+    a = np.zeros((size, size), dtype=np.float32)
+    for c, n in zip(cols, lengths):
+        for i in range(size):
+            a[i, c] = n - i * n / size
+    return a
+
+
+TF = from_origin(600000, 4700000, 1.0, 1.0)
+
+
+def test_keypoint_on_synthetic_valley():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem()
+    kps = detect_keypoints(dem, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool))
+    assert len(kps) == 1
+    assert abs(kps[0]["row"] - 40) <= 2 and abs(kps[0]["col"] - 40) <= 2
+    assert kps[0]["valley_cells"] > 0
+
+
+def test_keypoints_ignore_buffer_outside_parcel():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem(cols=(40, 10))
+    accum = _accum(80, (40, 10), (80, 500))  # biggest accumulation outside the parcel
+    mask = np.ones((80, 80), bool)
+    mask[:, :25] = False
+    kps = detect_keypoints(dem, TF, accum, mask)
+    assert kps
+    assert all(mask[k["row"], k["col"]] for k in kps)
+
+
+def test_two_valleys_two_keypoints_main_first():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem(cols=(20, 60))
+    accum = _accum(80, (20, 60), (40, 80))
+    kps = detect_keypoints(dem, TF, accum, np.ones((80, 80), bool))
+    assert len(kps) == 2
+    assert kps[0]["valley_cells"] >= kps[1]["valley_cells"]
+    assert abs(kps[0]["col"] - 60) <= 2 and abs(kps[1]["col"] - 20) <= 2
+
+
+def test_flat_dem_no_keypoint():
+    from app.services.keyline import detect_keypoints
+    flat = np.full((80, 80), 100.0, dtype=np.float32)
+    assert detect_keypoints(flat, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool)) == []
+
+
+def test_components_diagonal_is_connected():
+    from app.services.keyline import _components
+    b = np.zeros((5, 5), bool)
+    b[1, 1] = b[2, 2] = True
+    assert len(_components(b)) == 1
+
+
+def test_components_gap_gives_two():
+    from app.services.keyline import _components
+    b = np.zeros((5, 5), bool)
+    b[1, 1] = b[1, 3] = True
+    assert len(_components(b)) == 2
+
+
+def test_components_branched_is_one():
+    from app.services.keyline import _components
+    b = np.zeros((7, 7), bool)
+    b[1, 1] = b[2, 2] = b[3, 3] = b[4, 3] = b[5, 3] = b[2, 4] = b[1, 5] = True
+    comps = _components(b)
+    assert len(comps) == 1 and len(comps[0]) == 7
+
+
+def test_planar_slope_with_channel_no_keypoint():
+    from app.services.keyline import detect_keypoints
+    i = np.arange(80)[:, None].astype(float)
+    j = np.arange(80)[None, :].astype(float)
+    dem = (120 - 0.3 * i + 0.5 * np.abs(j - 40)).astype(np.float32)
+    assert detect_keypoints(dem, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool)) == []
+
+
+def test_walk_stays_on_valley_floor():
+    from app.services.keyline import _valley_floor_path
+    dem = _valley_dem()
+    accum = _accum(80, (40,), (80,))
+    valley = accum >= 8
+    path = _valley_floor_path(dem, accum, valley, (72, 40))
+    assert all(valley[r, c] for r, c in path)
+    assert all(c == 40 for _, c in path)
+
+
+# ---- Trace and clipping ----
+
+import shapely
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+
+
+@pytest.fixture
+def hillside():
+    """120x120 valley running north-south, falling to the south, 1 m cells."""
+    n = 120
+    dem = np.fromfunction(
+        lambda i, j: 100 + (np.sqrt((j - 59.5) ** 2 + 9.0) - 3) * 0.1 + (1 - i / n) * 6, (n, n), dtype=np.float64
+    )
+    transform = from_origin(600000, 4700000, 1.0, 1.0)
+    mask = np.ones((n, n), dtype=bool)
+    x, y = transform @ (60.5, 60.5)
+    kp = {"row": 60, "col": 60, "x": float(x), "y": float(y),
+          "z": float(dem[60, 60]), "valley_cells": 60}
+    return dem, transform, mask, kp
+
+
+def test_keyline_crosses_slope_both_sides_and_stays_in_mask(hillside):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = hillside
+    line = trace_keyline(dem, transform, kp, 0.005, mask)
+    assert isinstance(line, LineString) and line.length > 20
+    xs = [p[0] for p in line.coords]
+    assert min(xs) < kp["x"] - 5 and max(xs) > kp["x"] + 5
+    assert line.distance(Point(kp["x"], kp["y"])) < 1.0
+    inv = ~transform
+    for x, y in line.coords:
+        c, r = inv @ (x, y)
+        assert mask[int(r), int(c)]
+    # mean grade along the path length of each arm is within 10 % of the design grade
+    from app.services.keyline import _z_many
+    def zat(p):
+        return float(_z_many(dem, inv, [p[0]], [p[1]])[0])
+    kpt = Point(kp["x"], kp["y"])
+    s_kp = line.project(kpt)
+    assert 0 < s_kp < line.length
+    arm_a = line.length - s_kp
+    for end, arm in ((line.coords[0], s_kp), (line.coords[-1], arm_a)):
+        assert arm > 10
+        mean_grade = (zat((kp["x"], kp["y"])) - zat(end)) / arm
+        assert mean_grade == pytest.approx(0.005, rel=0.10)
+    # left of travel is uphill
+    left = shapely.get_parts(line.offset_curve(3.0))
+    right = shapely.get_parts(line.offset_curve(-3.0))
+    def mean_z(g):
+        zs = []
+        for p in shapely.get_coordinates(g):
+            c, r = inv @ p
+            if 0 <= int(r) < 120 and 0 <= int(c) < 120:
+                zs.append(dem[int(r), int(c)])
+        return np.mean(zs)
+    assert np.mean([mean_z(g) for g in left]) > np.mean([mean_z(g) for g in right])
+
+
+def test_keyline_stops_at_mask_edge(hillside):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = hillside
+    small = np.zeros_like(mask)
+    small[50:70, 40:80] = True
+    line = trace_keyline(dem, transform, kp, 0.005, small)
+    assert line.length > 0
+    inv = ~transform
+    for x, y in line.coords:
+        c, r = inv @ (x, y)
+        assert small[int(r), int(c)]
+    x0, y0 = transform @ (40, 70)
+    x1, y1 = transform @ (80, 50)
+    edge = box(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)).exterior
+    for end in (line.coords[0], line.coords[-1]):
+        assert edge.distance(Point(end)) <= 1.0 + 1e-6
+
+
+@pytest.fixture
+def crest():
+    """Slope falling 0.1 to the west that ends in a near-flat top (0.02) at column 80."""
+    n = 120
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    dem = 100 - 0.1 * np.minimum(j, 80.0) - 0.02 * np.maximum(j - 80.0, 0.0)
+    transform = from_origin(600000, 4700000, 1.0, 1.0)
+    x, y = transform @ (60.5, 60.5)
+    kp = {"row": 60, "col": 60, "x": float(x), "y": float(y),
+          "z": float(dem[60, 60]), "valley_cells": 60}
+    return dem, transform, np.ones((n, n), dtype=bool), kp
+
+
+def test_keyline_stops_at_ridge_crest(crest):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = crest
+    # grade 0.05 on a 0.1 slope: the line drifts 20 m across to the flat top
+    line = trace_keyline(dem, transform, kp, 0.05, mask)
+    for end in (line.coords[0], line.coords[-1]):
+        # ends on the flat top (column 80) ...
+        assert end[0] - kp["x"] == pytest.approx(19.5, abs=2.0)
+        # ... not at the mask edge, 60 m away
+        assert 5 < (kp["y"] - end[1]) + 60 < 115
+    assert line.length > 40
+
+
+def _lines(result):
+    return [r["geometry"] for r in result]
+
+
+# ---- Nodata, flat valley floors, analysis grid, coverage ----
+
+
+def test_analysis_grid_fills_small_gaps_and_keeps_wide_ones():
+    from app.services.keyline import ANALYSIS_CELL_M, NODATA_FILL_MAX_M, analysis_grid
+    n = 100
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    plane = 200 - 0.1 * i - 0.05 * j
+    dem = plane.copy()
+    dem[20:23, 20:23] = np.nan                  # 6 m hole
+    dem[:, 60:] = np.nan                        # 80 m wide gap
+    acc = np.ones((n, n))
+    acc[np.isnan(dem)] = np.nan
+    tf = from_origin(600000, 4700000, ANALYSIS_CELL_M, ANALYSIS_CELL_M)
+    d, a, t = analysis_grid(dem, tf, acc)
+    assert t == tf and d.shape == dem.shape
+    assert np.abs(d[20:23, 20:23] - plane[20:23, 20:23]).max() < 0.1
+    far = int(NODATA_FILL_MAX_M / ANALYSIS_CELL_M) + 2
+    assert np.isnan(d[:, 60 + far:]).all()      # beyond the fill distance
+    assert np.isfinite(d[:, 60]).all()          # gap edge is filled
+    assert not np.isnan(a).any() and a[50, 90] == 0.0
+
+
+def test_keypoints_ignore_nodata_cells():
+    from app.services.keyline import detect_keypoints
+    dem = _valley_dem().astype(float)
+    accum = _accum(80, (40,), (80,))
+    dem[70:80, 30:50] = np.nan                  # gap over the valley outlet
+    kps = detect_keypoints(dem, TF, accum, np.ones((80, 80), bool))
+    assert len(kps) == 1
+    assert abs(kps[0]["row"] - 40) <= 2 and abs(kps[0]["col"] - 40) <= 2
+    assert np.isfinite(kps[0]["z"])
+
+
+def test_trace_ends_before_nodata_without_crashing(hillside):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = hillside
+    dem = dem.copy()
+    dem[:, 85:95] = np.nan                      # gap across the east arm
+    line = trace_keyline(dem, transform, kp, 0.005, mask)
+    xs = [p[0] for p in line.coords]
+    assert all(np.isfinite(shapely.get_coordinates(line)).ravel())
+    assert max(xs) < transform.c + 85
+    assert min(xs) < kp["x"] - 20               # the west arm is unaffected
+
+
+def test_keypoint_on_valley_with_flat_floor_stretch():
+    """A breached DEM leaves flat stretches on valley floors; steepest descent
+    recomputed there has no direction, so the floor walk must not rely on it."""
+    from app.services.keyline import _valley_floor_path, detect_keypoints
+    n = 80
+    i = np.arange(n)[:, None].astype(float)
+    j = np.arange(n)[None, :].astype(float)
+    floor = np.where(i <= 40, 120 - 0.5 * i, np.where(i <= 60, 100 - 0.05 * (i - 40), 99.0))
+    dem = floor + 0.5 * np.abs(j - 40)
+    accum = np.zeros((n, n))
+    accum[:, 40] = np.arange(n) + 1.0           # grows downstream, across the flat
+    valley = accum >= 8
+    path = _valley_floor_path(dem, accum, valley, (79, 40))
+    assert path[-1] == (7, 40)                  # walked through the flat to the top
+    kps = detect_keypoints(dem, TF, accum, np.ones((n, n), bool))
+    assert len(kps) == 1 and abs(kps[0]["row"] - 40) <= 2 and kps[0]["col"] == 40
+
+
+def _fine_valley(cell=0.5, size_m=160.0, furrow=0.08):
+    """Valley falling south, slope break 80 m down, with plough furrows 1 m apart
+    (amplitude `furrow` m) running down the slope."""
+    n = int(size_m / cell)
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    y, x = (i + 0.5) * cell, (j + 0.5) * cell
+    floor = np.where(y <= 80, 130 - 0.25 * y, 110 - 0.025 * (y - 80))
+    cross = (np.sqrt((x - 80) ** 2 + 9.0) - 3) * 0.15
+    dem = floor + cross + furrow * np.sin(2 * np.pi * x / 1.0)
+    acc = np.zeros((n, n))
+    acc[:, int(80 / cell)] = (np.arange(n) + 1) * 4.0
+    return dem, acc, from_origin(600000, 4700000, cell, cell)
+
+
+def test_fine_dem_is_analysed_on_coarser_grid():
+    from app.services.keyline import ANALYSIS_CELL_M, analysis_grid, detect_keypoints, trace_keyline
+    dem, acc, tf = _fine_valley()
+    d, a, t = analysis_grid(dem, tf, acc)
+    assert t.a == ANALYSIS_CELL_M and t.e == -ANALYSIS_CELL_M and (t.c, t.f) == (tf.c, tf.f)
+    assert d.shape == (80, 80)
+    # furrows (1 m wavelength) average out on the 2 m grid
+    assert np.abs(d[10, 10] - (130 - 0.25 * 21 + (np.sqrt(59 ** 2 + 9) - 3) * 0.15)) < 0.01
+    # accumulation keeps the drainage line, in analysis cells
+    assert a.max() == pytest.approx(acc.max() / 16)
+    mask = np.ones(d.shape, bool)
+    kps = detect_keypoints(d, t, a, mask)
+    assert len(kps) == 1
+    assert abs(kps[0]["x"] - (tf.c + 80)) <= 4 and abs((tf.f - kps[0]["y"]) - 80) <= 4
+    line = trace_keyline(d, t, kps[0], 0.005, mask)
+    assert line.length > 50
+
+
+def test_dem_at_analysis_cell_is_unchanged():
+    from app.services.keyline import analysis_grid
+    dem, acc, tf = _fine_valley(cell=2.0, furrow=0.0)
+    d, a, t = analysis_grid(dem, tf, acc)
+    assert t == tf and np.array_equal(d, dem) and np.array_equal(a, acc)
+
+
+def test_keyline_ends_before_turning_back_over_a_crest():
+    """Ridge along column 60 whose sides are steeper than its fall: the contour
+    turns back (> 90 degrees) over the crest, onto the other slope."""
+    from app.services.keyline import trace_keyline
+    n = 120
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    dem = 100 - 0.05 * i - 0.1 * np.abs(j - 60)
+    x, y = TF @ (40.5, 10.5)
+    kp = {"row": 10, "col": 40, "x": float(x), "y": float(y), "z": float(dem[10, 40])}
+    line = trace_keyline(dem, TF, kp, 0.005, np.ones((n, n), bool))
+    xs = [p[0] - TF.c for p in line.coords]
+    crest = 60.5                                # centre of column 60
+    assert crest - 3 < max(xs) <= crest + 1     # ends at the crest, within a step
+    assert min(xs) < 40
+
+
+def test_keyline_ends_where_slope_reverses():
+    """Uphill is north west of column 50 and south east of it: going on would
+    put uphill on the other side of the line, so it ends at column 50."""
+    from app.services.keyline import trace_keyline
+    n = 100
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    dem = 100 + 0.1 * (60 - i) * np.where(j < 50, 1.0, -1.0)
+    x, y = TF @ (30.5, 60.5)
+    kp = {"row": 60, "col": 30, "x": float(x), "y": float(y), "z": 100.0}
+    line = trace_keyline(dem, TF, kp, 0.005, np.ones((n, n), bool))
+    xs = [p[0] - TF.c for p in line.coords]
+    assert 47 < max(xs) <= 51
+    assert min(xs) < 5
+
+
+def test_analysis_grid_with_cell_not_dividing_2m():
+    """0.75 m cells: block factor round(2 / 0.75) = 3, so the grid is 2.25 m."""
+    from app.services.keyline import analysis_grid
+    n = 100
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    dem = 100 - 0.75 * (0.05 * i + 0.02 * j)
+    acc = np.zeros((n, n))
+    acc[:, 50] = np.arange(n) + 1.0
+    tf = from_origin(600000, 4700000, 0.75, 0.75)
+    d, a, t = analysis_grid(dem, tf, acc)
+    assert t.a == pytest.approx(2.25) and t.e == pytest.approx(-2.25) and (t.c, t.f) == (tf.c, tf.f)
+    assert d.shape == (34, 34)                  # 100 / 3 rounded up, edge blocks partial
+    assert d[0, 0] == pytest.approx(dem[0:3, 0:3].mean())
+    assert d[33, 33] == pytest.approx(dem[99, 99])      # 1-cell edge block
+    assert a.max() == pytest.approx(100 / 9)
+
+
+# ---- Lines traced at grade, within 1.5 %, away from drainage ----
+
+TF2 = from_origin(600000, 4700000, 2.0, 2.0)
+N2 = 100
+
+
+def _kp2(dem, row, col):
+    x, y = TF2 @ (col + 0.5, row + 0.5)
+    return {"row": row, "col": col, "x": float(x), "y": float(y), "z": float(dem[row, col])}
+
+
+def _plane():
+    """200 m square on 2 m cells, falling 5 % to the south."""
+    i = np.arange(N2)[:, None].astype(float)
+    return np.repeat(100 - 0.05 * 2.0 * i, N2, axis=1)
+
+
+def _fan():
+    """Slope rising from 3 % in the west to 11 % in the east."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    return 100 - (0.03 + 0.0004 * 2.0 * j) * 2.0 * i
+
+
+def _spur_and_hollow():
+    """Two valleys running south at x = 50 m and x = 150 m with a spur between
+    them (crest at x = 100 m), and a hollow coming down the spur's west side
+    into the west valley; drainage lines carry 1000 cells."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x, y = (j + 0.5) * 2.0, (i + 0.5) * 2.0
+    dv = np.minimum(np.abs(x - 50), np.abs(x - 150))
+    dem = 100 - 0.04 * y + 0.12 * (np.sqrt(dv ** 2 + 25) - 5)
+    # hollow along y = 60 + (x - 50) * 0.4 for 50 < x < 95
+    along = (x > 50) & (x < 95)
+    off = np.abs(y - (60 + (x - 50) * 0.4))
+    dem -= np.where(along, 1.5 * np.exp(-(off / 6.0) ** 2) * (95 - x) / 45, 0.0)
+    acc = np.zeros((N2, N2))
+    acc[:, 25] = acc[:, 75] = 1000.0
+    for jj in range(26, 47):
+        xx = (jj + 0.5) * 2.0
+        acc[int((60 + (xx - 50) * 0.4) / 2.0), jj] = 1000.0
+    return dem, acc
+
+
+PARCEL2 = box(600003.3, 4699803.3, 600196.7, 4699996.7)
+
+
+def _run(dem, parcel=PARCEL2, kps=((50, 50),), **kw):
+    from app.services.keyline import keyline_layout
+    return keyline_layout(dem, TF2, np.ones(dem.shape, bool), parcel,
+                          [_kp2(dem, *k) for k in kps], 12.0, **kw)
+
+
+def _no_crossings(lines):
+    tree = shapely.STRtree(lines)
+    return not any(a < b for a, b in zip(*tree.query(lines, predicate="intersects")))
+
+
+def _coverage(lines, parcel, spacing=12.0):
+    from shapely.ops import unary_union
+    return unary_union([g.buffer(spacing / 2) for g in lines]).intersection(parcel).area / parcel.area
+
+
+def _bunched(lines, spacing=12.0):
+    """Pairs of lines closer than half the spacing over more than 20 m."""
+    n = 0
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            if lines[i].intersection(lines[j].buffer(0.5 * spacing - 1e-6)).length > 20.0:
+                n += 1
+    return n
+
+
+def _prominence(z):
+    """Largest prominence of an interior local high of profile `z`: its
+    height above the higher of the lowest points between it and the nearest
+    higher point (or the line end) on each side."""
+    best = 0.0
+    inner = np.flatnonzero((z[1:-1] > z[:-2]) & (z[1:-1] >= z[2:])) + 1
+    for j in inner:
+        p = z[j]
+        cols = []
+        for side in (z[j + 1:], z[:j][::-1]):        # both neighbours are lower
+            higher = np.flatnonzero(side > p)
+            cols.append(side[:higher[0]].min() if len(higher) else side.min())
+        l_col, r_col = cols
+        best = max(best, float(p - max(l_col, r_col)))
+    return best
+
+
+def _counter_slope(g, dem):
+    """(largest interior-high prominence, largest climb above the lowest point
+    reached walking from the high end) of line `g` sampled every 0.1 m, and
+    the profile. No line may hold an interior high over 5 cm."""
+    from app.services.keyline import _profile
+    _, z = _profile(g, dem, ~TF2, 0.1)
+    walked = z if z[0] >= z[-1] else z[::-1]
+    climb = float((walked - np.minimum.accumulate(walked)).max())
+    return _prominence(z), climb, z
+
+
+def test_prominence_helper():
+    assert _prominence(np.array([5.0, 4, 3, 2, 1])) == 0.0
+    assert _prominence(np.array([5.0, 4, 3, 3.5, 3, 2])) == pytest.approx(0.5)
+    assert _prominence(np.array([5.0, 4, 3, 3.5, 3.2, 3.6, 2])) == pytest.approx(0.6)
+    assert _prominence(np.array([1.0, 2, 3, 2, 1])) == pytest.approx(2.0)
+    assert _prominence(np.array([3.0, 2, 1, 2, 3])) == 0.0         # highs at the ends only
+
+
+def test_layout_traces_spaced_lines_at_grade_on_a_plane():
+    from app.services.keyline import MAX_LINE_GRADE, line_grade
+    res = _run(_plane())
+    keylines = [r for r in res["lines"] if r["direction"] == "keyline"]
+    lines = [r for r in res["lines"] if r["direction"] == "line"]
+    assert len(keylines) == 1 and len(lines) >= 10
+    for r in lines:                             # traced at the design grade
+        mean, worst = line_grade(r["geometry"], _plane(), TF2)
+        assert (mean, worst) == pytest.approx((r["grade"], r["max_grade_20m"]))
+        assert 0.003 < r["grade"] < 0.007 and r["max_grade_20m"] <= MAX_LINE_GRADE
+    geoms = _lines(res["lines"])
+    assert _no_crossings(geoms) and _bunched(geoms) == 0
+    # neighbours about one spacing apart
+    gaps = [min(g.distance(h) for h in geoms if h is not g) for g in geoms]
+    assert 6.0 <= min(gaps) and np.median(gaps) == pytest.approx(12.0, abs=3.0)
+    assert all(g.difference(PARCEL2.buffer(1e-6)).is_empty for g in geoms)
+    assert res["coverage_pct"] == pytest.approx(100 * _coverage(geoms, PARCEL2))
+    assert res["coverage_pct"] > 75 and res["coverage_truncated"] is False
+
+
+def test_layout_drops_lines_shorter_than_min_line_m():
+    from app.services.keyline import DEFAULT_MIN_LINE_M
+    assert DEFAULT_MIN_LINE_M == 100.0
+    counts = {}
+    for m in (50.0, 150.0):
+        lines = [r["geometry"] for r in _run(_fan(), min_line_m=m)["lines"] if r["direction"] == "line"]
+        assert lines and all(g.length >= m for g in lines)
+        counts[m] = len(lines)
+    assert counts[50.0] > counts[150.0]
+    default = [r["geometry"] for r in _run(_fan())["lines"] if r["direction"] == "line"]
+    assert all(g.length >= 100.0 for g in default)
+
+
+def test_layout_max_lines_seeds_only_rows_next_to_the_keyline():
+    res = _run(_plane(), max_lines=1)
+    keyline = [r["geometry"] for r in res["lines"] if r["direction"] == "keyline"][0]
+    lines = [r["geometry"] for r in res["lines"] if r["direction"] == "line"]
+    assert lines and all(g.distance(keyline) <= 12.0 + 1.0 for g in lines)
+    assert len(lines) < len([r for r in _run(_plane())["lines"] if r["direction"] == "line"])
+
+
+def test_layout_respects_holes_and_multipolygon():
+    hole = box(600070, 4699870, 600130, 4699930)
+    holed = Polygon(PARCEL2.exterior.coords, [hole.exterior.coords])
+    res = _run(_plane(), parcel=holed, kps=((20, 50),), min_line_m=30.0)
+    assert res["lines"]
+    for g in _lines(res["lines"]):
+        assert g.intersection(hole.buffer(-1e-6)).is_empty
+    multi = MultiPolygon([box(600003.3, 4699803.3, 600080, 4699996.7),
+                          box(600120, 4699803.3, 600196.7, 4699996.7)])
+    res2 = _run(_plane(), parcel=multi, kps=((50, 20),), min_line_m=30.0)
+    gap = box(600080.001, 4699800, 600119.999, 4700000)
+    assert res2["lines"] and all(g.intersection(gap).is_empty for g in _lines(res2["lines"]))
+    assert max(g.centroid.x for g in _lines(res2["lines"])) > 600120
+
+
+def test_layout_caps_line_grade_on_steepening_ground():
+    from app.services.keyline import MAX_LINE_GRADE, line_grade
+    fan = _fan()
+    res = _run(fan, min_line_m=30.0)
+    assert res["lines"]
+    assert all(line_grade(g, fan, TF2)[1] <= MAX_LINE_GRADE for g in _lines(res["lines"]))
+
+
+def test_layout_never_crosses_unfilled_nodata():
+    dem = _plane()
+    dem[40:60, 20:40] = np.nan
+    footprint = box(600040, 4699880, 600080, 4699920)
+    res = _run(dem, min_line_m=30.0)
+    lines = _lines(res["lines"])
+    assert lines and not any(g.intersects(footprint) for g in lines)
+
+
+def test_layout_spur_and_hollow_no_humps_no_fall_towards_drainage():
+    from app.services.keyline import MAX_LINE_GRADE, keyline_layout
+    dem, acc = _spur_and_hollow()
+    res = keyline_layout(dem, TF2, np.ones(dem.shape, bool), PARCEL2, [], 12.0,
+                         min_line_m=50.0, flow_accum=acc)
+    lines = [r["geometry"] for r in res["lines"] if r["direction"] == "line"]
+    drain = shapely.MultiPoint([TF2 @ (c + 0.5, r + 0.5) for r, c in np.argwhere(acc > 0)])
+    assert len(lines) >= 5 and {g.centroid.x < TF2.c + 100 for g in lines} == {True, False}
+    for g in lines:
+        prominence, climb, z = _counter_slope(g, dem)
+        assert prominence <= 0.05 and climb <= 0.05      # no hump, no counter-slope
+        high, low = (g.coords[0], g.coords[-1]) if z[0] >= z[-1] else (g.coords[-1], g.coords[0])
+        assert shapely.Point(low).distance(drain) >= shapely.Point(high).distance(drain) - 2.0
+        assert g.length >= 50.0
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res["lines"])
+    assert _no_crossings(lines) and _bunched(lines) == 0
+
+
+def test_layout_reports_when_the_seed_limit_stops_it(monkeypatch):
+    from app.services import keyline
+    assert _run(_plane())["coverage_truncated"] is False
+    monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
+    stopped = _run(_plane())
+    assert stopped["coverage_truncated"] is True and stopped["failed_seeds"] == 0
+    assert {r["direction"] for r in stopped["lines"]} == {"keyline"}
+
+
+def test_layout_stops_at_the_time_budget(monkeypatch):
+    from app.services import keyline
+    assert _run(_plane())["stopped_by"] is None
+    monkeypatch.setattr(keyline, "LAYOUT_TIME_BUDGET_S", 0.0)
+    stopped = _run(_plane())
+    assert stopped["coverage_truncated"] is True and stopped["stopped_by"] == "time_budget"
+    assert {r["direction"] for r in stopped["lines"]} == {"keyline"}
+
+
+def test_end_to_end_valley_to_layout():
+    from app.services.keyline import MAX_LINE_GRADE, detect_keypoints, keyline_layout
+    dem, acc, tf = _fine_valley(cell=2.0, furrow=0.0)
+    mask = np.ones(dem.shape, bool)
+    kps = detect_keypoints(dem, tf, acc, mask)
+    parcel = box(tf.c + 5, tf.f - 155, tf.c + 155, tf.f - 5)
+    res = keyline_layout(dem, tf, mask, parcel, kps, 12.0, min_line_m=50.0, flow_accum=acc)
+    assert any(r["direction"] == "keyline" for r in res["lines"])
+    lines = _lines(res["lines"])
+    assert _no_crossings(lines) and _bunched(lines) == 0
+    assert all(g.difference(parcel.buffer(1e-6)).is_empty for g in lines)
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res["lines"])
+    assert 0 < res["coverage_pct"] <= 100
+
+
+def test_falling_parts_splits_humps():
+    """A line straight over a ridge rises then falls: it is split at the crest
+    into two parts that each start high."""
+    from app.services.keyline import COUNTER_SLOPE_TOL_M, _falling_parts
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    dem = 100 - 0.01 * np.abs((j + 0.5) * 2.0 - 100)
+    line = LineString([(TF2.c + 40, TF2.f - 101), (TF2.c + 160, TF2.f - 101)])
+    assert _counter_slope(line, dem)[0] > 0.5
+    parts = _falling_parts(line, dem, TF2, lambda pts: None, 15.0)
+    assert len(parts) == 2
+    for g in parts:
+        assert max(_counter_slope(g, dem)[:2]) <= COUNTER_SLOPE_TOL_M
+        assert g.length == pytest.approx(60.0, abs=2.0)      # crest within a cell
+
+
+def test_falling_parts_keeps_only_lines_falling_away_from_drainage():
+    """Drainage along x = 0: a line must be high near it and low away from it."""
+    from app.services.keyline import _falling_parts
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x = (j + 0.5) * 2.0
+    to_drain = lambda pts: np.array([p[0] - TF2.c for p in pts])
+    away = 100 - 0.01 * x                       # high next to the drainage
+    towards = 100 + 0.01 * x                    # low next to the drainage
+    line = LineString([(TF2.c + 50, TF2.f - 101), (TF2.c + 150, TF2.f - 101)])
+    for g in (line, LineString(line.coords[::-1])):
+        assert _falling_parts(g, away, TF2, to_drain, 15.0) == [g]
+        assert _falling_parts(g, towards, TF2, to_drain, 15.0) == []
+
+
+def _rill(depth=0.8):
+    """200 m square falling 10 % to the south, crossed by a rill `depth` m
+    deep (Gaussian, 2 m wide) running down the slope at x = 100 m."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x, y = (j + 0.5) * 2.0, (i + 0.5) * 2.0
+    return 100 - 0.1 * y - depth * np.exp(-((x - 100) / 2.0) ** 2)
+
+
+def test_trace_never_climbs_out_of_a_dip():
+    """A line traced across a rill drops into it; it must not climb back out
+    (the trace used to steer back up to its target, ~10 cm here): it ends at
+    the rill instead."""
+    from app.services.keyline import COUNTER_SLOPE_TOL_M, _walk
+    dem = _rill()
+    start = (TF2.c + 40, TF2.f - 101)
+    pts = _walk(dem, TF2, np.ones(dem.shape, bool), *start, 0.005, +1, 1.0)
+    line = LineString([start] + pts)
+    prominence, climb, _ = _counter_slope(line, dem)
+    assert line.length > 40                     # reaches the rill
+    assert prominence <= 0.05 and climb <= COUNTER_SLOPE_TOL_M + 0.005
+    assert max(x for x, _ in pts) < TF2.c + 105   # and stops in it
+
+
+def test_layout_lines_never_hold_a_counter_slope():
+    from app.services.keyline import MAX_LINE_GRADE, keyline_layout
+    dem = _rill()
+    res = keyline_layout(dem, TF2, np.ones(dem.shape, bool), PARCEL2, [], 12.0, min_line_m=50.0)
+    lines = [r["geometry"] for r in res["lines"] if r["direction"] == "line"]
+    assert len(lines) >= 10 and {g.centroid.x < TF2.c + 100 for g in lines} == {True, False}
+    for g in lines:
+        prominence, climb, _ = _counter_slope(g, dem)
+        assert prominence <= 0.05 and climb <= 0.05
+        assert g.length >= 50.0
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res["lines"])
+    assert _no_crossings(lines) and _bunched(lines) == 0
+
+
+def test_falling_parts_splits_at_the_bottom_of_a_dip():
+    """A straight line along the contour across the rill falls into it and
+    climbs out: it is split at the bottom into two parts without a
+    counter-slope."""
+    from app.services.keyline import COUNTER_SLOPE_TOL_M, _falling_parts
+    dem = _rill()
+    line = LineString([(TF2.c + 40, TF2.f - 101), (TF2.c + 160, TF2.f - 101)])
+    assert _counter_slope(line, dem)[1] > 0.5
+    parts = _falling_parts(line, dem, TF2, lambda pts: None, 15.0)
+    assert len(parts) == 2
+    for g in parts:
+        assert max(_counter_slope(g, dem)[:2]) <= COUNTER_SLOPE_TOL_M

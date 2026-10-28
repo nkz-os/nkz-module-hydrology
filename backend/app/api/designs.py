@@ -1,6 +1,7 @@
 """Hydrology design endpoints — generation, CRUD, export."""
 from __future__ import annotations
 
+import functools
 import io
 import json
 import logging
@@ -14,20 +15,21 @@ import httpx
 import rasterio
 from pyproj import Transformer
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from nkz_platform_sdk import SyncOrionClient, AuthContext, inject_fiware_headers
 
 from app.config import get_settings
 from app.middleware import require_auth
 from app.services.design_generator import (
     download_raster,
-    generate_keyline_parallels,
     extract_contour_at_elevation,
     find_slope_inflections,
 )
 from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
 from app.services.hydro_record import nkz_attr
-from app.services.keyline import detect_keyline
+from app.services.keyline import (
+    MAX_LINE_GRADE, analysis_grid, detect_keyline, detect_keypoints, keyline_layout,
+)
 from app.services.pond_score import pond_score
 from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
 from app.services.compliance import requires_water_permit, breach_risk_class, PERMIT_THRESHOLDS_M3
@@ -41,9 +43,10 @@ router = APIRouter(prefix="/design", tags=["hydrology-designs"])
 
 class KeylineRequest(BaseModel):
     parcel_id: str
-    grade: float = 0.005
-    spacing: float = 12.0
-    lines: int = 7
+    grade: float = Field(0.005, gt=0)
+    spacing: float = Field(12.0, gt=0)
+    lines: int | None = Field(None, ge=0)  # rows of lines out from the keylines; None = as far as the terrain allows
+    min_line_m: float = Field(100.0, gt=0)  # shorter traced lines are dropped
 
 
 class PondScoreRequest(BaseModel):
@@ -81,42 +84,145 @@ class DesignSaveRequest(BaseModel):
 
 # ── Generation endpoints ──────────────────────────────────────────────
 
+# Keyline needs a DEM fine enough to resolve a 0.5 % contour.
+MAX_KEYLINE_CELL_M = 5.0
+
+
+def _parcel_polygon(parcel_id: str, tenant_id: str):
+    """Parcel polygon (WGS84 shapely geometry) from Orion, or None if it has none.
+
+    Raises HTTP 502 when the broker cannot be read.
+    """
+    from shapely.geometry import shape
+
+    try:
+        ent = SyncOrionClient(tenant_id).get_entity(parcel_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("parcel %s: Orion read failed: %s", parcel_id, type(exc).__name__)
+        raise HTTPException(
+            status_code=502,
+            detail={"status": "orion_unavailable", "detail": "Parcel could not be read from the broker"},
+        )
+    loc = (ent or {}).get("location")
+    geom = loc.get("value") if isinstance(loc, dict) and "value" in loc else loc
+    if not isinstance(geom, dict) or geom.get("type") not in ("Polygon", "MultiPolygon"):
+        return None
+    try:
+        poly = shape(geom)
+    except Exception:  # noqa: BLE001
+        return None
+    return None if poly.is_empty else poly
+
+
+def _polygonal(geom):
+    """The polygonal part of `geom` made valid (a self-crossing ring becomes
+    the polygons it encloses), or None when no area is left."""
+    import shapely
+    from shapely.geometry import MultiPolygon
+
+    parts = [p for p in shapely.get_parts(shapely.make_valid(geom))
+             for p in (shapely.get_parts(p) if p.geom_type == "MultiPolygon" else [p])]
+    polys = [p for p in parts if p.geom_type == "Polygon" and not p.is_empty and p.area > 0]
+    if not polys:
+        return None
+    return polys[0] if len(polys) == 1 else MultiPolygon(polys)
+
+
 @router.post("/keyline/generate")
 def generate_keyline(
     req: KeylineRequest,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Generate keypoint + primary keyline + N parallel lines."""
-    from app.services.design_generator import download_raster, generate_keyline_parallels
+    """Keypoints of the valleys in the parcel, their keylines and lines traced at grade."""
+    from rasterio import features
+    from rasterio.warp import transform_geom
+    from shapely.geometry import mapping, shape
+    from app.services.design_generator import download_raster
 
     dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
     accum = download_raster(req.parcel_id, auth.tenant_id, "accum.tif")
     if not dem or not accum:
         return {"status": "no_data", "detail": "Run DEM pipeline first"}
 
-    dem_arr, transform, crs = _read_dem(dem)
-    accum_arr, _, _ = _read_dem(accum)
+    dem_arr, transform, crs = _read_raster_nan(dem)
+    accum_arr, _, _ = _read_raster_nan(accum)
+    # Cell sizes, spacing and grades are in metres: a DEM in degrees (or with
+    # no CRS) would pass the cell-size check below and trace nonsense.
+    if crs is None or not crs.is_projected:
+        return {"status": "no_data", "detail": "DEM is not in a projected (metric) CRS"}
 
-    kl_res = detect_keyline(dem_arr, transform, accum_arr)
-    if not kl_res:
+    cell_m = max(abs(transform.a), abs(transform.e))
+    if cell_m > MAX_KEYLINE_CELL_M:
+        return {
+            "status": "terrain_too_coarse",
+            "detail": f"DEM cell size {cell_m:.1f} m exceeds {MAX_KEYLINE_CELL_M:.0f} m",
+            "cell_size_m": cell_m,
+            "max_cell_size_m": MAX_KEYLINE_CELL_M,
+        }
+
+    parcel_wgs = _parcel_polygon(req.parcel_id, auth.tenant_id)
+    if parcel_wgs is None:
+        return {"status": "no_data", "detail": "Parcel has no polygon"}
+    parcel_utm = _polygonal(shape(transform_geom("EPSG:4326", crs, mapping(parcel_wgs))))
+    if parcel_utm is None:
+        return {"status": "no_data", "detail": "Parcel polygon is not a valid area"}
+    # Analysis runs on a field-scale grid with nodata gaps filled
+    # (see keyline.ANALYSIS_CELL_M / NODATA_FILL_MAX_M).
+    dem_arr, accum_arr, transform = analysis_grid(dem_arr, transform, accum_arr)
+    parcel_mask = features.rasterize(
+        [(mapping(parcel_utm), 1)], out_shape=dem_arr.shape,
+        transform=transform, fill=0, dtype="uint8",
+    ).astype(bool) & np.isfinite(dem_arr)
+
+    kps = detect_keypoints(dem_arr, transform, accum_arr, parcel_mask)
+    if not kps:
         return {"status": "no_keypoint", "detail": "No keypoint found in this parcel"}
 
-    keypoint = kl_res["keypoint"]
-    keyline = kl_res["keyline"]
-    parallels = generate_keyline_parallels(
-        dem, keyline["coordinates"], req.spacing, req.lines, req.grade
+    result = keyline_layout(
+        dem_arr, transform, parcel_mask, parcel_utm, kps, req.spacing,
+        grade=req.grade, max_lines=req.lines, min_line_m=req.min_line_m, flow_accum=accum_arr,
     )
+    layout = result["lines"]
+    if result["coverage_truncated"]:
+        logger.warning(
+            "keyline layout for parcel %s (tenant %s) stopped early (%s): "
+            "%d seeds gave no guide, %d lines, spacing %.1f m, grade %.4f",
+            req.parcel_id, auth.tenant_id, result["stopped_by"], result["failed_seeds"],
+            len(layout), req.spacing, req.grade,
+        )
 
-    # Reproject all geometry UTM -> WGS84 (parallels computed in UTM first).
-    keypoint["coordinates"] = _to_wgs84(keypoint["coordinates"], crs)
-    keyline["coordinates"] = _to_wgs84(keyline["coordinates"], crs)
-    for p in parallels["parallels"]:
-        p["geometry"]["coordinates"] = _to_wgs84(p["geometry"]["coordinates"], crs)
+    def _line_wgs(g) -> dict:
+        return {"type": "LineString", "coordinates": _to_wgs84([list(c) for c in g.coords], crs)}
 
+    def _metrics(p) -> dict:
+        return {"grade": round(p["grade"], 5), "max_grade_20m": round(p["max_grade_20m"], 5)}
+
+    keypoints = [
+        {"type": "Point", "coordinates": _to_wgs84([kp["x"], kp["y"], kp["z"]], crs)}
+        for kp in kps
+    ]
+    # Keylines are the layout's "keyline" entries, grouped by valley; every
+    # line carries the grade measured on the terrain (see keyline_layout).
+    per_valley = [[p for p in layout if p["direction"] == "keyline" and p["valley"] == i]
+                  for i in range(len(kps))]
+    keyline_entries = [p for pcs in per_valley for p in pcs]
+    main = max(per_valley[0], key=lambda p: p["geometry"].length) if per_valley[0] else None
+    parallels = [
+        {"geometry": _line_wgs(p["geometry"]), "direction": p["direction"], **_metrics(p)}
+        for p in layout
+        if p["direction"] != "keyline"
+    ]
     return {
-        "keypoint": keypoint,
-        "keyline": keyline,
-        "parallel_lines": parallels["parallels"],
+        "keypoint": keypoints[0],
+        "keyline": _line_wgs(main["geometry"]) if main else None,
+        "keyline_metrics": _metrics(main) if main else None,
+        "keypoints": keypoints,
+        "keylines": [_line_wgs(p["geometry"]) for p in keyline_entries],
+        "keylines_metrics": [_metrics(p) for p in keyline_entries],
+        "parallel_lines": parallels,
+        "max_line_grade": MAX_LINE_GRADE,
+        "coverage_truncated": result["coverage_truncated"],
+        "coverage_pct": round(result["coverage_pct"], 1),
         "request": req.model_dump(),
         "status": "ok",
     }
@@ -326,6 +432,16 @@ def _read_dem(dem_bytes: bytes) -> tuple:
             return ds.read(1), ds.transform, ds.crs
 
 
+def _read_raster_nan(raster_bytes: bytes) -> tuple:
+    """First band as float64 with the nodata value (and NaN) as NaN."""
+    with io.BytesIO(raster_bytes) as f:
+        with rasterio.open(f) as ds:
+            arr = ds.read(1).astype("float64")
+            if ds.nodata is not None and not math.isnan(ds.nodata):
+                arr[arr == ds.nodata] = np.nan
+            return arr, ds.transform, ds.crs
+
+
 def _local_slope_pct(arr, row, col, transform) -> float:
     """Local terrain slope (%) at a pixel via 3x3 finite difference (UTM metres)."""
     ny, nx = arr.shape
@@ -335,6 +451,13 @@ def _local_slope_pct(arr, row, col, transform) -> float:
     dzdx = (float(arr[row, col + 1]) - float(arr[row, col - 1])) / (2.0 * pixel_m)
     dzdy = (float(arr[row + 1, col]) - float(arr[row - 1, col])) / (2.0 * pixel_m)
     return math.hypot(dzdx, dzdy) * 100.0
+
+
+@functools.lru_cache(maxsize=16)
+def _transformer_to_wgs84(src_crs: str) -> Transformer:
+    # Building a Transformer costs ~20 ms; a keyline pattern converts
+    # hundreds of lines.
+    return Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
 
 
 def _to_wgs84(coords, src_crs):
@@ -348,7 +471,7 @@ def _to_wgs84(coords, src_crs):
     if not coords:
         return coords
 
-    transformer = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True)
+    transformer = _transformer_to_wgs84(str(src_crs))
 
     def _one(c):
         lon, lat = transformer.transform(c[0], c[1])

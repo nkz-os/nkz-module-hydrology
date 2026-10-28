@@ -12,31 +12,73 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   const { setDesigns, setDesignsVisible } = useHydrologyLayerContext();
   const [grade, setGrade] = useState(0.5);
   const [spacing, setSpacing] = useState(12);
-  const [lines, setLines] = useState(7);
+  const [lines, setLines] = useState('');
+  const [minLine, setMinLine] = useState(100);
+  const [error, setError] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [label, setLabel] = useState('');
   const [savedId, setSavedId] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
+  // Parameters of the last generation: a save stores the values its lines
+  // were generated with, not what the inputs hold now.
+  const [sentParams, setSentParams] = useState<{ grade: number; spacing: number; lines: number | null; min_line_m: number } | null>(null);
+
+  // Empty = no limit (null); 0 = the keylines only; n = n rows of lines out from them.
+  const linesValue = lines.trim() === '' || !(Number(lines) >= 0) ? null : Math.floor(Number(lines));
+  const minLineValue = minLine > 0 ? minLine : 100;
+
+  const statusMessage = (): string | null => {
+    if (error) return t('hydrology:keylineError');
+    switch (result?.status) {
+      case 'no_keypoint': return t('hydrology:keylineNoKeypoint');
+      case 'terrain_too_coarse':
+        return t('hydrology:keylineTerrainTooCoarse', {
+          cell: result.cell_size_m != null ? result.cell_size_m.toFixed(1) : '?',
+          max: result.max_cell_size_m ?? 5,
+        });
+      case 'no_data': return t('hydrology:keylineNoData');
+      default: return null;
+    }
+  };
+  const message = statusMessage();
+  // Keylines (main valley's when only the singular field is set) and every
+  // pattern line. A pattern may hold guides only, with no keyline at all.
+  const keylineGeoms: any[] = result?.keylines?.length ? result.keylines : result?.keyline ? [result.keyline] : [];
+  const patternGeoms: any[] = (result?.parallel_lines || []).map((p: any) => p.geometry);
+  const designGeoms: any[] = [...keylineGeoms, ...patternGeoms];
+  const hasLines = result?.status === 'ok' && designGeoms.length > 0;
 
   const generate = async () => {
     setLoading(true);
     setSavedId(undefined);
+    setError(false);
+    setResult(null);
+    setSentParams(null);
+    const params = { grade: grade / 100, spacing, lines: linesValue, min_line_m: minLineValue };
     try {
-      const res = await api.generateKeyline({
-        parcel_id: parcelId, grade: grade / 100, spacing, lines,
-      });
+      const res = await api.generateKeyline({ parcel_id: parcelId, ...params });
       setResult(res);
+      setSentParams(params);
 
       const geoms: DesignGeometry[] = [];
-      if (res.keyline) {
+      const mains = res.keylines?.length ? res.keylines : res.keyline ? [res.keyline] : [];
+      const mainKey = res.keyline ? JSON.stringify(res.keyline.coordinates) : null;
+      let primaryShown = false;
+      mains.forEach((g, i) => {
+        const primary = !primaryShown && JSON.stringify(g.coordinates) === mainKey;
+        primaryShown = primaryShown || primary;
         geoms.push({
-          id: 'keyline-primary',
+          id: `keyline-primary-${i}`,
           type: 'keyline',
-          geometry: res.keyline,
-          label: t('hydrology:primaryKeyline'),
+          geometry: g,
+          label: t(primary ? 'hydrology:primaryKeyline' : 'hydrology:keyline'),
         });
-      }
+      });
+      const points = res.keypoints?.length ? res.keypoints : res.keypoint ? [res.keypoint] : [];
+      points.forEach((g, i) => {
+        geoms.push({ id: `keypoint-${i}`, type: 'keyline', geometry: g, label: t('hydrology:keypoint') });
+      });
       (res.parallel_lines || []).forEach((p, i) => {
         geoms.push({ id: `keyline-parallel-${i}`, type: 'keyline', geometry: p.geometry });
       });
@@ -44,22 +86,23 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
       setDesignsVisible(true);
     } catch (e) {
       console.error('Keyline generation failed:', e);
+      setDesigns([]);
+      setError(true);
     } finally {
       setLoading(false);
     }
   };
 
   const save = async () => {
-    if (!result?.keyline) return;
-    const coordinates: number[][][] = [result.keyline.coordinates];
-    (result.parallel_lines || []).forEach((p: any) => coordinates.push(p.geometry.coordinates));
+    if (!hasLines || !sentParams) return;
+    const coordinates: number[][][] = designGeoms.map((g: any) => g.coordinates);
     setSaving(true);
     try {
       const { id } = await api.saveDesign({
         parcel_id: parcelId,
         design_type: 'keyline',
         geometry: { type: 'MultiLineString', coordinates },
-        parameters: { grade: grade / 100, spacing, lines },
+        parameters: sentParams,
         label: label || t('hydrology:keylineDesigner'),
       });
       setSavedId(id);
@@ -85,14 +128,27 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
       </div>
       <div>
         <label className="text-xs text-nkz-muted">{t('hydrology:lines')}</label>
-        <input type="number" value={lines} onChange={(e) => setLines(Number(e.target.value))}
+        <input type="number" min={0} value={lines} onChange={(e) => setLines(e.target.value)}
+               placeholder={t('hydrology:keylineCoverParcel')}
+               className="w-full border rounded px-2 py-1 text-sm" />
+      </div>
+      <div>
+        <label className="text-xs text-nkz-muted">{t('hydrology:minLineLength')}</label>
+        <input type="number" min={1} value={minLine} onChange={(e) => setMinLine(Number(e.target.value))}
                className="w-full border rounded px-2 py-1 text-sm" />
       </div>
       <button onClick={generate} disabled={loading}
               className="bg-nkz-accent-base text-white px-3 py-1 rounded text-sm w-full">
         {loading ? t('hydrology:loading') : t('hydrology:keypoint')}
       </button>
-      {result?.keyline && (
+      {message && <p role="alert" className="text-xs text-nkz-muted">{message}</p>}
+      {result?.status === 'ok' && result.coverage_pct != null && (
+        <p className="text-xs text-nkz-muted">
+          {t('hydrology:keylineCoverage', { pct: Number(result.coverage_pct).toFixed(0) })}
+          {result.coverage_truncated ? ` ${t('hydrology:keylineCoverageTruncated')}` : ''}
+        </p>
+      )}
+      {hasLines && (
         <>
           <div className="flex gap-1 pt-1">
             <input
@@ -107,7 +163,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
               {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
             </button>
           </div>
-          <ExportMenu designType="keyline" geometry={result.keyline} designId={savedId} />
+          <ExportMenu designType="keyline" geometry={{ type: 'MultiLineString', coordinates: designGeoms.map((g: any) => g.coordinates) }} designId={savedId} />
         </>
       )}
     </div>
