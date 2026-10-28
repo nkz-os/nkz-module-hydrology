@@ -102,8 +102,10 @@ export interface KeylineRequest {
   parcel_id: string;
   grade: number;
   spacing: number;
-  /** Omitted or null covers the whole parcel. */
+  /** Rows of lines seeded out from the keylines; omitted or null = as far as the terrain allows. */
   lines?: number | null;
+  /** Traced lines shorter than this (m) are dropped; default 100. */
+  min_line_m?: number;
 }
 
 export type KeylineStatus = 'ok' | 'no_data' | 'no_keypoint' | 'terrain_too_coarse';
@@ -128,14 +130,15 @@ export interface KeylineResponse {
     grade: number;
     /** Largest fall over any 20 m of the line; never above max_line_grade. */
     max_grade_20m?: number;
-    /** 'guide': a new line traced at the design grade where parallels would exceed max_line_grade. */
-    direction: 'up' | 'down' | 'guide';
-    offset_m?: number;
+    /** 'line': traced on the terrain at the design grade, about one spacing from its neighbours. */
+    direction: 'line';
   }>;
   /** Cap on max_grade_20m of every line (fraction). */
   max_line_grade?: number;
   /** True when the layout stopped at its seed limit with ground left uncovered. */
   coverage_truncated?: boolean;
+  /** Share of the parcel within half a spacing of a line (%). */
+  coverage_pct?: number;
   request?: KeylineRequest;
   /** Present when status is terrain_too_coarse. */
   cell_size_m?: number;

@@ -13,6 +13,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   const [grade, setGrade] = useState(0.5);
   const [spacing, setSpacing] = useState(12);
   const [lines, setLines] = useState('');
+  const [minLine, setMinLine] = useState(100);
   const [error, setError] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -50,6 +51,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
     try {
       const res = await api.generateKeyline({
         parcel_id: parcelId, grade: grade / 100, spacing, lines: linesValue,
+        min_line_m: minLine > 0 ? minLine : 100,
       });
       setResult(res);
 
@@ -90,7 +92,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
         parcel_id: parcelId,
         design_type: 'keyline',
         geometry: { type: 'MultiLineString', coordinates },
-        parameters: { grade: grade / 100, spacing, lines: linesValue },
+        parameters: { grade: grade / 100, spacing, lines: linesValue, min_line_m: minLine },
         label: label || t('hydrology:keylineDesigner'),
       });
       setSavedId(id);
@@ -120,11 +122,22 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
                placeholder={t('hydrology:keylineCoverParcel')}
                className="w-full border rounded px-2 py-1 text-sm" />
       </div>
+      <div>
+        <label className="text-xs text-nkz-muted">{t('hydrology:minLineLength')}</label>
+        <input type="number" min={1} value={minLine} onChange={(e) => setMinLine(Number(e.target.value))}
+               className="w-full border rounded px-2 py-1 text-sm" />
+      </div>
       <button onClick={generate} disabled={loading}
               className="bg-nkz-accent-base text-white px-3 py-1 rounded text-sm w-full">
         {loading ? t('hydrology:loading') : t('hydrology:keypoint')}
       </button>
       {message && <p role="alert" className="text-xs text-nkz-muted">{message}</p>}
+      {result?.status === 'ok' && result.coverage_pct != null && (
+        <p className="text-xs text-nkz-muted">
+          {t('hydrology:keylineCoverage', { pct: Number(result.coverage_pct).toFixed(0) })}
+          {result.coverage_truncated ? ` ${t('hydrology:keylineCoverageTruncated')}` : ''}
+        </p>
+      )}
       {hasLines && (
         <>
           <div className="flex gap-1 pt-1">
