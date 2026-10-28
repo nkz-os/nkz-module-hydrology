@@ -498,6 +498,30 @@ def _round_coords(coords):
     return [_round_coords(c) for c in coords]
 
 
+def _broker_geometry(geom) -> dict:
+    """GeoJSON the broker's geo index accepts: valid polygons on a 1e-6 degree grid.
+
+    Simplification and plain rounding can leave self-crossing rings, which the
+    index refuses; snapping with set_precision keeps the output valid. Parts that
+    collapse to nothing are dropped. Returns {} when nothing is left.
+    """
+    import shapely
+    from shapely.geometry import MultiPolygon, mapping
+
+    snapped = shapely.set_precision(shapely.make_valid(geom), 10 ** -_COORD_DECIMALS)
+    # make_valid may return a collection mixing polygons with lines or points.
+    pieces = []
+    for part in shapely.get_parts(snapped):
+        pieces.extend(shapely.get_parts(part) if part.geom_type == "MultiPolygon" else [part])
+    parts = [p for p in pieces if p.geom_type == "Polygon" and not p.is_empty and p.area > 0]
+    if not parts:
+        return {}
+    out = parts[0] if len(parts) == 1 else MultiPolygon(parts)
+    geometry = mapping(out)
+    # Coordinates are already on the grid; rounding only trims float noise.
+    return {"type": geometry["type"], "coordinates": _round_coords(geometry["coordinates"])}
+
+
 def _bounded_zone_geometry(merged, crs, res_m: float, parcel_geometry: dict | None) -> dict:
     """WGS84 geometry of a zone, clipped to the parcel, no larger than the budget.
 
@@ -505,6 +529,7 @@ def _bounded_zone_geometry(merged, crs, res_m: float, parcel_geometry: dict | No
     statistics come from the raster masks, so only the drawn outline coarsens.
     Returns {} (zone kept, no outline) when even the coarsest outline is too big.
     """
+    import shapely
     from rasterio.warp import transform_geom
     from shapely.geometry import shape as shp_shape, mapping
 
@@ -513,18 +538,18 @@ def _bounded_zone_geometry(merged, crs, res_m: float, parcel_geometry: dict | No
         simplified = merged.simplify(tolerance=tolerance, preserve_topology=False)
         if simplified.is_empty:
             return {}
-        geometry = transform_geom(crs, "EPSG:4326", mapping(simplified))
+        zone = shp_shape(transform_geom(crs, "EPSG:4326", mapping(simplified)))
         # Clip to the parcel boundary so zones never bleed outside.
-        if parcel_geometry and geometry.get("type"):
+        if parcel_geometry:
             try:
-                clipped = shp_shape(geometry).intersection(shp_shape(parcel_geometry))
-                if clipped.is_empty:
-                    return {}
-                if clipped.geom_type in ("Polygon", "MultiPolygon"):
-                    geometry = mapping(clipped)
+                zone = shapely.make_valid(zone).intersection(shp_shape(parcel_geometry))
             except Exception:
                 pass
-        geometry = {"type": geometry["type"], "coordinates": _round_coords(geometry["coordinates"])}
+        if zone.is_empty:
+            return {}
+        geometry = _broker_geometry(zone)
+        if not geometry:
+            return {}
         if len(json.dumps(geometry)) <= MAX_ZONE_GEOMETRY_BYTES:
             return geometry
         tolerance *= 2
