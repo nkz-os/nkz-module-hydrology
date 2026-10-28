@@ -8,6 +8,9 @@ import numpy as np
 from rasterio.transform import Affine
 from typing import Optional
 
+import shapely
+from shapely.geometry import LineString, MultiPolygon, Polygon
+
 
 # A valley is a connected set of in-parcel cells whose flow accumulation is at
 # least this fraction of the largest in-parcel accumulation (and the cell floor
@@ -20,6 +23,12 @@ MIN_VALLEY_RELIEF_M = 1.0
 # Minimum grade difference (upstream steeper than downstream) for a floor slope
 # break to count as a keypoint (convex -> concave transition).
 MIN_SLOPE_BREAK = 0.01
+
+# Pieces of a clipped keyline shorter than this (m) are not worth a ripping
+# pass (a tractor cannot work them), so they are dropped.
+MIN_SEGMENT_M = 15.0
+# Default design grade of the keyline (fall per metre away from the valley).
+DEFAULT_GRADE = 0.005
 
 _NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
@@ -251,3 +260,130 @@ def detect_keyline(
         ),
         },
     }
+
+
+def _bilinear(dem: np.ndarray, r: float, c: float) -> float:
+    ny, nx = dem.shape
+    r = min(max(r, 0.0), ny - 1.0)
+    c = min(max(c, 0.0), nx - 1.0)
+    r0, c0 = min(int(r), ny - 2), min(int(c), nx - 2)
+    fr, fc = r - r0, c - c0
+    top = dem[r0, c0] * (1 - fc) + dem[r0, c0 + 1] * fc
+    bot = dem[r0 + 1, c0] * (1 - fc) + dem[r0 + 1, c0 + 1] * fc
+    return float(top * (1 - fr) + bot * fr)
+
+
+def _gradient(dem, inv, a, e, x, y, h):
+    """(dz/dx, dz/dy) in world units by central differences of the bilinear surface."""
+    def z(px, py):
+        c, r = inv @ (px, py)
+        return _bilinear(dem, r - 0.5, c - 0.5)
+    return ((z(x + h, y) - z(x - h, y)) / (2 * h), (z(x, y + h) - z(x, y - h)) / (2 * h))
+
+
+def _walk(dem, transform, mask, x0, y0, grade, side, step):
+    """Points from (x0, y0) following the contour with the design grade."""
+    inv = ~transform
+    ny, nx = mask.shape
+    pts = []
+    x, y = x0, y0
+    prev = None
+    for _ in range(int(4 * (ny + nx) * abs(transform.a) / step) + 10):
+        gx, gy = _gradient(dem, inv, transform.a, transform.e, x, y, step)
+        g = math.hypot(gx, gy)
+        # Below the design grade the slope cannot carry the line: flat ground
+        # or a ridge crest, so the line ends.
+        if g < grade:
+            break
+        ux, uy = -gx / g, -gy / g            # downhill unit vector
+        tx, ty = -uy, ux                      # contour tangent
+        if prev is None:
+            tx, ty = side * tx, side * ty
+        elif tx * prev[0] + ty * prev[1] < 0:
+            tx, ty = -tx, -ty
+        s = min(1.0, grade / g)               # dz/ds = -g * sin(alpha) = -grade
+        ca = math.sqrt(1 - s * s)
+        dx, dy = ca * tx + s * ux, ca * ty + s * uy
+        nxp, nyp = x + step * dx, y + step * dy
+        c, r = inv @ (nxp, nyp)
+        ri, ci = int(math.floor(r)), int(math.floor(c))
+        if not (0 <= ri < ny and 0 <= ci < nx) or not mask[ri, ci]:
+            break
+        pts.append((nxp, nyp))
+        prev = (dx, dy)
+        x, y = nxp, nyp
+    return pts
+
+
+def trace_keyline(dem, transform, keypoint: dict, grade: float, parcel_mask) -> LineString:
+    """Keyline through `keypoint`, in the DEM CRS.
+
+    Goes both ways across the slope; elevation falls `grade` per metre of line
+    away from the valley. Stops at the mask edge or where the slope is flatter
+    than `grade` (ridge). The line is oriented so that its left side is the
+    uphill side (`keyline_pattern` relies on this for "up"/"down").
+    """
+    mask = np.asarray(parcel_mask, dtype=bool)
+    step = abs(transform.a)
+    x0, y0 = keypoint["x"], keypoint["y"]
+    first = _walk(dem, transform, mask, x0, y0, grade, +1, step)
+    second = _walk(dem, transform, mask, x0, y0, grade, -1, step)
+    coords = list(reversed(first)) + [(x0, y0)] + second
+    if len(coords) < 2:
+        return LineString()
+    line = LineString(coords)
+    # Orient: uphill must be on the left of travel.
+    gx, gy = _gradient(dem, ~transform, transform.a, transform.e, x0, y0, step)
+    (ax, ay), (bx, by) = coords[0], coords[-1]
+    dx, dy = bx - ax, by - ay
+    left_dot = (-dy) * gx + dx * gy        # left normal . uphill gradient
+    if left_dot < 0:
+        line = LineString(list(line.coords)[::-1])
+    return line
+
+
+def keyline_pattern(
+    keylines: list,
+    spacing_m: float,
+    parcel_utm,
+    max_lines: Optional[int] = None,
+    min_segment_m: float = MIN_SEGMENT_M,
+    grade: float = DEFAULT_GRADE,
+) -> list:
+    """Keylines plus true parallel offsets, clipped to the parcel.
+
+    Offsets are made at multiples of `spacing_m` on both sides (positive =
+    left = uphill = "up", per `trace_keyline`'s orientation) until they leave
+    the parcel or `max_lines` per side. Pieces shorter than `min_segment_m`
+    are dropped and the later of any two intersecting lines is removed
+    (nearest offsets first, keylines in the order given). `grade` is the
+    design grade reported on every line.
+    """
+    candidates = []  # (|k|, keyline index, signed k, line)
+    for idx, kl in enumerate(keylines):
+        if kl is None or kl.is_empty:
+            continue
+        reach = kl.hausdorff_distance(parcel_utm)
+        kmax = int(reach // spacing_m) + 1
+        if max_lines is not None:
+            kmax = min(kmax, max_lines)
+        candidates.append((0, idx, 0, kl))
+        for k in range(1, kmax + 1):
+            for sign in (1, -1):
+                off = kl.offset_curve(sign * k * spacing_m)
+                if off.is_empty:
+                    continue
+                candidates.append((k, idx, sign * k, off))
+    candidates.sort(key=lambda t: (t[0], t[1], -t[2]))
+
+    out = []
+    for _, _, k, line in candidates:
+        kept_before = list(out)  # only lines from earlier candidates can veto
+        for piece in shapely.get_parts(line.intersection(parcel_utm)):
+            if piece.geom_type != "LineString" or piece.length < min_segment_m:
+                continue
+            if any(piece.intersects(o["geometry"]) for o in kept_before):
+                continue
+            out.append({"geometry": piece, "offset_m": float(k * spacing_m),
+                        "direction": "up" if k >= 0 else "down", "grade": grade})
+    return out

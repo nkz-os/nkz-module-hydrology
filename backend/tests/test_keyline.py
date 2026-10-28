@@ -160,3 +160,143 @@ def test_walk_stays_on_valley_floor():
     path = _valley_floor_path(dem, accum, valley, (72, 40))
     assert all(valley[r, c] for r, c in path)
     assert all(c == 40 for _, c in path)
+
+
+# ---- Task 2: trace, parallels, clipping -----------------------------------
+
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
+
+
+@pytest.fixture
+def hillside():
+    """120x120 valley running north-south, falling to the south, 1 m cells."""
+    n = 120
+    dem = np.fromfunction(
+        lambda i, j: 100 + abs(j - 60) * 0.1 + (1 - i / n) * 6, (n, n), dtype=np.float64
+    )
+    transform = from_origin(600000, 4700000, 1.0, 1.0)
+    mask = np.ones((n, n), dtype=bool)
+    x, y = transform @ (60.5, 60.5)
+    kp = {"row": 60, "col": 60, "x": float(x), "y": float(y),
+          "z": float(dem[60, 60]), "valley_cells": 60}
+    return dem, transform, mask, kp
+
+
+def test_keyline_crosses_slope_both_sides_and_stays_in_mask(hillside):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = hillside
+    line = trace_keyline(dem, transform, kp, 0.005, mask)
+    assert isinstance(line, LineString) and line.length > 20
+    xs = [p[0] for p in line.coords]
+    assert min(xs) < kp["x"] - 5 and max(xs) > kp["x"] + 5
+    assert line.distance(Point(kp["x"], kp["y"])) < 1.0
+    inv = ~transform
+    for x, y in line.coords:
+        c, r = inv @ (x, y)
+        assert mask[int(r), int(c)]
+    # elevation falls ~grade per metre away from the valley on both ends
+    z0 = kp["z"]
+    for end in (line.coords[0], line.coords[-1]):
+        c, r = inv @ end
+        d = math.hypot(end[0] - kp["x"], end[1] - kp["y"])
+        assert dem[int(r), int(c)] < z0
+        assert abs((z0 - dem[int(r), int(c)]) / d - 0.005) < 0.003
+    # left of travel is uphill (contract used by keyline_pattern)
+    left = line.offset_curve(3.0)
+    right = line.offset_curve(-3.0)
+    def mean_z(g):
+        zs = []
+        for p in g.coords:
+            c, r = inv @ p
+            if 0 <= int(r) < 120 and 0 <= int(c) < 120:
+                zs.append(dem[int(r), int(c)])
+        return np.mean(zs)
+    assert mean_z(left) > mean_z(right)
+
+
+def test_keyline_stops_at_mask_edge(hillside):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = hillside
+    small = np.zeros_like(mask)
+    small[50:70, 40:80] = True
+    line = trace_keyline(dem, transform, kp, 0.005, small)
+    inv = ~transform
+    for x, y in line.coords:
+        c, r = inv @ (x, y)
+        assert small[int(r), int(c)]
+
+
+@pytest.fixture
+def arc():
+    return LineString([(0, 100), (50, 110), (100, 112), (150, 108), (200, 98)])
+
+
+def _lines(result):
+    return [r["geometry"] for r in result]
+
+
+def test_pattern_spacing_respected(arc):
+    from app.services.keyline import keyline_pattern
+    parcel = box(0, 0, 200, 220)
+    res = keyline_pattern([arc], 12.0, parcel)
+    ups = sorted((r for r in res if r["direction"] == "up"), key=lambda r: r["offset_m"])
+    assert len(ups) >= 3
+    for a, b in zip(ups, ups[1:]):
+        assert a["geometry"].distance(b["geometry"]) == pytest.approx(12.0, rel=0.01)
+    offs = sorted(r["offset_m"] for r in res)
+    assert offs[0] < 0 < offs[-1] and 0.0 in offs
+    assert all(r["grade"] == 0.005 for r in res)
+
+
+def test_pattern_lines_inside_parcel(arc):
+    from app.services.keyline import keyline_pattern
+    parcel = Polygon([(10, 20), (190, 30), (170, 200), (20, 190)])
+    res = keyline_pattern([arc], 10.0, parcel)
+    total = sum(g.length for g in _lines(res))
+    inside = sum(g.intersection(parcel.buffer(1e-6)).length for g in _lines(res))
+    assert total > 0 and inside / total == pytest.approx(1.0)
+
+
+def test_pattern_no_crossings(arc):
+    from app.services.keyline import keyline_pattern
+    other = LineString([(0, 60), (100, 140), (200, 70)])
+    res = keyline_pattern([arc, other], 9.0, box(0, 0, 200, 220))
+    lines = _lines(res)
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            assert not lines[i].intersects(lines[j])
+    assert res[0]["geometry"].equals(arc.intersection(box(0, 0, 200, 220)))
+
+
+def test_pattern_drops_short_segments(arc):
+    from app.services.keyline import MIN_SEGMENT_M, keyline_pattern
+    parcel = box(0, 0, 200, 220)
+    res = keyline_pattern([arc], 10.0, parcel)
+    assert all(g.length >= MIN_SEGMENT_M for g in _lines(res))
+    # a parcel corner that leaves only a tiny piece of a line gives nothing
+    corner = box(0, 99, 3, 101)
+    assert keyline_pattern([arc], 10.0, corner) == []
+    # max_lines per side
+    capped = keyline_pattern([arc], 10.0, parcel, max_lines=2)
+    assert len(capped) <= 5
+
+
+def test_pattern_respects_holes_and_multipolygon(arc):
+    from app.services.keyline import keyline_pattern
+    hole = box(70, 80, 130, 140)
+    holed = Polygon(box(0, 0, 200, 220).exterior.coords, [hole.exterior.coords])
+    res = keyline_pattern([arc], 8.0, holed)
+    assert res
+    for g in _lines(res):
+        assert g.intersection(hole.buffer(-1e-6)).is_empty
+        assert g.length >= 1
+    assert any(g.distance(hole) < 1e-6 for g in _lines(res))
+
+    a, b = box(0, 0, 80, 220), box(120, 0, 200, 220)
+    multi = MultiPolygon([a, b])
+    res2 = keyline_pattern([arc], 8.0, multi)
+    gap = box(80.001, 0, 119.999, 220)
+    for g in _lines(res2):
+        assert g.intersection(gap).is_empty
+    xs = [g.centroid.x for g in _lines(res2)]
+    assert min(xs) < 80 and max(xs) > 120
