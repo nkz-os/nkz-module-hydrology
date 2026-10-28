@@ -120,3 +120,43 @@ def test_flat_dem_no_keypoint():
     from app.services.keyline import detect_keypoints
     flat = np.full((80, 80), 100.0, dtype=np.float32)
     assert detect_keypoints(flat, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool)) == []
+
+
+def test_components_diagonal_is_connected():
+    from app.services.keyline import _components
+    b = np.zeros((5, 5), bool)
+    b[1, 1] = b[2, 2] = True
+    assert len(_components(b)) == 1
+
+
+def test_components_gap_gives_two():
+    from app.services.keyline import _components
+    b = np.zeros((5, 5), bool)
+    b[1, 1] = b[1, 3] = True
+    assert len(_components(b)) == 2
+
+
+def test_components_branched_is_one():
+    from app.services.keyline import _components
+    b = np.zeros((7, 7), bool)
+    b[1, 1] = b[2, 2] = b[3, 3] = b[4, 3] = b[5, 3] = b[2, 4] = b[1, 5] = True
+    comps = _components(b)
+    assert len(comps) == 1 and len(comps[0]) == 7
+
+
+def test_planar_slope_with_channel_no_keypoint():
+    from app.services.keyline import detect_keypoints
+    i = np.arange(80)[:, None].astype(float)
+    j = np.arange(80)[None, :].astype(float)
+    dem = (120 - 0.3 * i + 0.5 * np.abs(j - 40)).astype(np.float32)
+    assert detect_keypoints(dem, TF, _accum(80, (40,), (80,)), np.ones((80, 80), bool)) == []
+
+
+def test_walk_stays_on_valley_floor():
+    from app.services.keyline import _valley_floor_path
+    dem = _valley_dem()
+    accum = _accum(80, (40,), (80,))
+    valley = accum >= 8
+    path = _valley_floor_path(dem, accum, valley, (72, 40))
+    assert all(valley[r, c] for r, c in path)
+    assert all(c == 40 for _, c in path)

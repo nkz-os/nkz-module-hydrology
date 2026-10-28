@@ -38,9 +38,10 @@ def _d8_target(dem: np.ndarray, r: int, c: int) -> Optional[tuple]:
     return best
 
 
-def _valley_floor_path(dem, flow_accum, mask, start):
+def _valley_floor_path(dem, flow_accum, valley, start):
     """Walk the D8 flow path upstream from `start`, following the largest
-    accumulation among in-parcel cells that drain into the current cell."""
+    accumulation among valley cells that drain into the current cell, so the
+    profile never leaves the valley floor onto hillslope cells."""
     ny, nx = dem.shape
     path = [start]
     seen = {start}
@@ -51,7 +52,7 @@ def _valley_floor_path(dem, flow_accum, mask, start):
             rr, cc = r + dr, c + dc
             if not (0 <= rr < ny and 0 <= cc < nx) or (rr, cc) in seen:
                 continue
-            if not mask[rr, cc] or _d8_target(dem, rr, cc) != (r, c):
+            if not valley[rr, cc] or _d8_target(dem, rr, cc) != (r, c):
                 continue
             if flow_accum[rr, cc] > best_acc:
                 best, best_acc = (rr, cc), float(flow_accum[rr, cc])
@@ -132,7 +133,7 @@ def detect_keypoints(
     for cells in components:
         zs = dem[cells[:, 0], cells[:, 1]]
         low = cells[int(np.argmin(zs))]
-        path = _valley_floor_path(dem, flow_accum, mask, (int(low[0]), int(low[1])))
+        path = _valley_floor_path(dem, flow_accum, valley, (int(low[0]), int(low[1])))
         floor = [dem[r, c] for r, c in path]
         if max(floor) - min(floor) < MIN_VALLEY_RELIEF_M:
             continue
