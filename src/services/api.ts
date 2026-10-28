@@ -134,6 +134,8 @@ export interface KeylineResponse {
   }>;
   /** Cap on max_grade_20m of every line (fraction). */
   max_line_grade?: number;
+  /** True when the layout stopped at its seed limit with ground left uncovered. */
+  coverage_truncated?: boolean;
   request?: KeylineRequest;
   /** Present when status is terrain_too_coarse. */
   cell_size_m?: number;

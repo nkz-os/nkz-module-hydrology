@@ -36,7 +36,11 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
     }
   };
   const message = statusMessage();
-  const hasLines = result?.status === 'ok' && (result.keylines?.length || result.keyline);
+  // Keylines (main valley's when only the singular field is set) and every
+  // pattern line. A pattern may hold guides only, with no keyline at all.
+  const keylineGeoms: any[] = result?.keylines?.length ? result.keylines : result?.keyline ? [result.keyline] : [];
+  const patternGeoms: any[] = (result?.parallel_lines || []).map((p: any) => p.geometry);
+  const hasLines = result?.status === 'ok' && keylineGeoms.length + patternGeoms.length > 0;
 
   const generate = async () => {
     setLoading(true);
@@ -79,9 +83,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
 
   const save = async () => {
     if (!hasLines) return;
-    const mains: any[] = result.keylines?.length ? result.keylines : [result.keyline];
-    const coordinates: number[][][] = mains.map((g: any) => g.coordinates);
-    (result.parallel_lines || []).forEach((p: any) => coordinates.push(p.geometry.coordinates));
+    const coordinates: number[][][] = [...keylineGeoms, ...patternGeoms].map((g: any) => g.coordinates);
     setSaving(true);
     try {
       const { id } = await api.saveDesign({
@@ -138,7 +140,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
               {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
             </button>
           </div>
-          <ExportMenu designType="keyline" geometry={result.keylines?.length ? { type: 'MultiLineString', coordinates: result.keylines.map((g: any) => g.coordinates) } : result.keyline} designId={savedId} />
+          <ExportMenu designType="keyline" geometry={{ type: 'MultiLineString', coordinates: (keylineGeoms.length ? keylineGeoms : patternGeoms).map((g: any) => g.coordinates) }} designId={savedId} />
         </>
       )}
     </div>
