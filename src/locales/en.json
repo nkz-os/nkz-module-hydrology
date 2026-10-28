@@ -34,7 +34,7 @@
     "keylineError": "Could not generate the design. Please try again.",
     "keypoint": "Keypoint",
     "primaryKeyline": "Primary keyline",
-    "parallelLines": "Parallel lines ({{count}})",
+    "tracedLines": "Lines traced at grade ({{count}})",
     "loading": "Loading...",
     "noData": "No hydrological data available for this parcel",
     "runAnalysis": "Run DEM analysis first",

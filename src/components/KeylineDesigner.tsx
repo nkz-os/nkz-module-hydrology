@@ -20,8 +20,12 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   const [label, setLabel] = useState('');
   const [savedId, setSavedId] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
+  // Parameters of the last generation: a save stores the values its lines
+  // were generated with, not what the inputs hold now.
+  const [sentParams, setSentParams] = useState<{ grade: number; spacing: number; lines: number | null; min_line_m: number } | null>(null);
 
   const linesValue = lines.trim() === '' || !(Number(lines) > 0) ? null : Math.floor(Number(lines));
+  const minLineValue = minLine > 0 ? minLine : 100;
 
   const statusMessage = (): string | null => {
     if (error) return t('hydrology:keylineError');
@@ -48,12 +52,12 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
     setSavedId(undefined);
     setError(false);
     setResult(null);
+    setSentParams(null);
+    const params = { grade: grade / 100, spacing, lines: linesValue, min_line_m: minLineValue };
     try {
-      const res = await api.generateKeyline({
-        parcel_id: parcelId, grade: grade / 100, spacing, lines: linesValue,
-        min_line_m: minLine > 0 ? minLine : 100,
-      });
+      const res = await api.generateKeyline({ parcel_id: parcelId, ...params });
       setResult(res);
+      setSentParams(params);
 
       const geoms: DesignGeometry[] = [];
       const mains = res.keylines?.length ? res.keylines : res.keyline ? [res.keyline] : [];
@@ -84,7 +88,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   };
 
   const save = async () => {
-    if (!hasLines) return;
+    if (!hasLines || !sentParams) return;
     const coordinates: number[][][] = [...keylineGeoms, ...patternGeoms].map((g: any) => g.coordinates);
     setSaving(true);
     try {
@@ -92,7 +96,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
         parcel_id: parcelId,
         design_type: 'keyline',
         geometry: { type: 'MultiLineString', coordinates },
-        parameters: { grade: grade / 100, spacing, lines: linesValue, min_line_m: minLine },
+        parameters: sentParams,
         label: label || t('hydrology:keylineDesigner'),
       });
       setSavedId(id);
