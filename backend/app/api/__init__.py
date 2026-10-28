@@ -17,6 +17,7 @@ from app.api.zonal import router as zonal_router
 from app.api.scenarios import router as scenarios_router
 from app.api.alerts import router as alerts_router
 from app.api.webhooks import router as webhooks_router
+from app.api.settings import router as settings_router
 
 
 # =============================================================================
@@ -36,3 +37,4 @@ router.include_router(zonal_router)
 router.include_router(scenarios_router)
 router.include_router(alerts_router)
 router.include_router(webhooks_router)
+router.include_router(settings_router)
