@@ -364,3 +364,102 @@ def test_score_pond_returns_compliance_block():
     assert comp["breachRisk"] == "low"
     assert comp["disclaimer"]
     assert comp["downstreamExposure"]["hasExposure"] is False
+
+
+# ── Keyline endpoint ───────────────────────────────────────────────────
+
+def _keyline_rasters(cell=1.0, size=80, flat=False):
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    tf = from_origin(600000, 4700000, cell, cell)
+    i = np.arange(size)[:, None].astype(float)
+    j = np.arange(size)[None, :].astype(float)
+    floor = np.where(i <= 40, 120 - 0.5 * i, 100 - 0.05 * (i - 40))
+    dem = np.full((size, size), 100.0) if flat else floor + 0.5 * np.abs(j - 40)
+    acc = np.zeros((size, size))
+    if not flat:
+        for r in range(size):
+            acc[r, 40] = 80 - r
+    out = {}
+    for name, arr in (("breached.tif", dem), ("accum.tif", acc)):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=size, width=size, count=1,
+                           dtype="float32", crs="EPSG:25830", transform=tf) as dst:
+            dst.write(arr.astype("float32"), 1)
+        out[name] = buf.getvalue()
+    return out
+
+
+def _parcel_wgs(size=80, cell=1.0, margin=5):
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+    x0, x1 = 600000 + margin, 600000 + size * cell - margin
+    y1, y0 = 4700000 - margin, 4700000 - size * cell + margin
+    ring = [t.transform(x, y) for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0))]
+    return {"type": "Polygon", "coordinates": [[list(c) for c in ring]]}
+
+
+def _call_keyline(rasters, parcel=None, **req):
+    from app.api import designs
+    from app.services import design_generator
+
+    entity = {"location": {"type": "GeoProperty", "value": parcel}} if parcel else {}
+    with patch.object(design_generator, "download_raster",
+                      side_effect=lambda pid, ten, name: rasters.get(name)), \
+         patch.object(designs, "SyncOrionClient") as MockOrion:
+        MockOrion.return_value.get_entity.return_value = entity
+        return designs.generate_keyline(
+            req=designs.KeylineRequest(parcel_id="p-1", spacing=6.0, **req),
+            auth=SimpleNamespace(tenant_id="tenant-a"),
+        )
+
+
+def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
+    res = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=2)
+    assert res["status"] == "ok"
+    assert res["keypoint"]["type"] == "Point"
+    assert res["keyline"]["type"] == "LineString"
+    assert len(res["keypoints"]) == 1 and len(res["keylines"]) == 1
+    assert res["keypoints"][0] == res["keypoint"]
+    assert res["parallel_lines"]
+    for p in res["parallel_lines"]:
+        assert set(p) == {"geometry", "grade", "direction", "offset_m"}
+        assert p["direction"] in ("up", "down")
+        assert p["geometry"]["type"] == "LineString"
+    assert res["request"]["lines"] == 2
+
+
+def test_keyline_lines_optional_covers_parcel():
+    capped = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=1)
+    full = _call_keyline(_keyline_rasters(), _parcel_wgs())
+    assert full["request"]["lines"] is None
+    assert len(full["parallel_lines"]) > len(capped["parallel_lines"])
+
+
+def test_keyline_refused_on_coarse_dem():
+    res = _call_keyline(_keyline_rasters(cell=25.0), _parcel_wgs(cell=25.0))
+    assert res["status"] == "terrain_too_coarse"
+    assert "keyline" not in res
+
+
+def test_keyline_no_keypoint_on_flat():
+    res = _call_keyline(_keyline_rasters(flat=True), _parcel_wgs())
+    assert res["status"] == "no_keypoint"
+
+
+def test_keyline_no_polygon_is_no_data():
+    assert _call_keyline(_keyline_rasters(), None)["status"] == "no_data"
+
+
+def test_keyline_all_coordinates_inside_parcel():
+    from shapely.geometry import shape
+    parcel = _parcel_wgs()
+    res = _call_keyline(_keyline_rasters(), parcel)
+    poly = shape(parcel).buffer(1e-6)
+    geoms = res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]
+    assert geoms
+    for g in geoms:
+        assert poly.covers(shape(g))

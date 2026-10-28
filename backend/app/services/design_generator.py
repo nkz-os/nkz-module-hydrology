@@ -41,59 +41,6 @@ def download_raster(parcel_id: str, tenant_id: str, raster_name: str):  # -> Opt
         return None
 
 
-# ── Keyline parallels ─────────────────────────────────────────────────
-
-def generate_keyline_parallels(
-    dem_bytes: bytes,
-    keyline_coords: list[list[float]],
-    spacing_m: float,
-    n_lines: int,
-    grade: float,
-) -> dict[str, Any]:
-    """Generate N parallel lines above and below a keyline.
-
-    Offsets the keyline uphill and downhill by spacing_m, then
-    recalculates coordinates to follow the target grade.
-
-    Args:
-        dem_bytes: GeoTIFF DEM in UTM projection (bytes).
-        keyline_coords: Primary keyline as [[x, y], ...] in UTM metres.
-        spacing_m: Distance between parallel lines (metres).
-        n_lines: Number of parallel lines on EACH side of the keyline.
-        grade: Target grade (e.g. 0.005 = 0.5%).
-
-    Returns:
-        dict with keys: primary (LineString GeoJSON), parallels (list of
-        {geometry, grade, direction}), metadata.
-    """
-    dem, transform = _read_dem(dem_bytes)
-    cell_size = abs(transform.a)
-
-    parallels = []
-    for side in ("up", "down"):
-        direction = 1 if side == "up" else -1
-        for i in range(1, n_lines + 1):
-            offset_m = spacing_m * i
-            # Offset perpendicular to keyline direction (simplified:
-            # shift north-south if keyline runs east-west).
-            offset_coords = []
-            for x, y in keyline_coords:
-                offset_coords.append([x, y + direction * offset_m])
-            alt_grade = grade * (-direction)
-            parallels.append({
-                "geometry": {"type": "LineString", "coordinates": offset_coords},
-                "grade": alt_grade,
-                "direction": side,
-                "offset_m": offset_m,
-            })
-
-    return {
-        "primary": {"type": "LineString", "coordinates": keyline_coords},
-        "parallels": parallels,
-        "metadata": {"spacing_m": spacing_m, "n_lines": n_lines, "grade": grade},
-    }
-
-
 # ── Contour extraction ────────────────────────────────────────────────
 
 def extract_contour_at_elevation(

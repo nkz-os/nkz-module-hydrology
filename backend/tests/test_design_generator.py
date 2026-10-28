@@ -4,7 +4,6 @@ import numpy as np
 import rasterio
 
 from app.services.design_generator import (
-    generate_keyline_parallels,
     extract_contour_at_elevation,
     find_slope_inflections,
 )
@@ -24,30 +23,6 @@ def _fake_dem(shape=(80, 80), transform=None):
                        transform=transform) as dst:
         dst.write(z.astype(np.float32), 1)
     return buf.getvalue(), transform, z
-
-
-class TestGenerateKeylineParallels:
-    def test_returns_requested_number_of_lines(self):
-        dem_bytes, transform, dem = _fake_dem()
-        # Keyline: horizontal line across the valley at row 40
-        keyline_coords = [[600000 + i * 2, 4700000 - 80] for i in range(40)]
-        result = generate_keyline_parallels(
-            dem_bytes, keyline_coords, spacing_m=10, n_lines=3, grade=0.005
-        )
-        assert "primary" in result
-        assert "parallels" in result
-        assert len(result["parallels"]) == 6  # 3 up + 3 down
-
-    def test_parallels_are_offset(self):
-        dem_bytes, transform, dem = _fake_dem()
-        keyline_coords = [[600000 + i * 2, 4700000 - 80] for i in range(40)]
-        result = generate_keyline_parallels(
-            dem_bytes, keyline_coords, spacing_m=10, n_lines=1, grade=0.005
-        )
-        assert len(result["parallels"]) == 2  # 1 up + 1 down
-        # Check they're different from primary
-        up_line = result["parallels"][0]["geometry"]["coordinates"]
-        assert up_line != keyline_coords
 
 
 class TestContourExtraction:

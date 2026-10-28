@@ -21,13 +21,12 @@ from app.config import get_settings
 from app.middleware import require_auth
 from app.services.design_generator import (
     download_raster,
-    generate_keyline_parallels,
     extract_contour_at_elevation,
     find_slope_inflections,
 )
 from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
 from app.services.hydro_record import nkz_attr
-from app.services.keyline import detect_keyline
+from app.services.keyline import detect_keyline, detect_keypoints, keyline_pattern, trace_keyline
 from app.services.pond_score import pond_score
 from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
 from app.services.compliance import requires_water_permit, breach_risk_class, PERMIT_THRESHOLDS_M3
@@ -43,7 +42,7 @@ class KeylineRequest(BaseModel):
     parcel_id: str
     grade: float = 0.005
     spacing: float = 12.0
-    lines: int = 7
+    lines: int | None = None  # None = cover the parcel
 
 
 class PondScoreRequest(BaseModel):
@@ -81,13 +80,40 @@ class DesignSaveRequest(BaseModel):
 
 # ── Generation endpoints ──────────────────────────────────────────────
 
+# Keyline needs a DEM fine enough to resolve a 0.5 % contour.
+MAX_KEYLINE_CELL_M = 5.0
+
+
+def _parcel_polygon(parcel_id: str, tenant_id: str):
+    """Parcel polygon (WGS84 shapely geometry) from Orion, or None."""
+    from shapely.geometry import shape
+
+    try:
+        ent = SyncOrionClient(tenant_id).get_entity(parcel_id)
+    except Exception as exc:  # noqa: BLE001 - reported as no_data
+        logger.warning("parcel %s: Orion read failed: %s", parcel_id, type(exc).__name__)
+        return None
+    loc = (ent or {}).get("location")
+    geom = loc.get("value") if isinstance(loc, dict) and "value" in loc else loc
+    if not isinstance(geom, dict) or geom.get("type") not in ("Polygon", "MultiPolygon"):
+        return None
+    try:
+        poly = shape(geom)
+    except Exception:  # noqa: BLE001
+        return None
+    return None if poly.is_empty else poly
+
+
 @router.post("/keyline/generate")
 def generate_keyline(
     req: KeylineRequest,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Generate keypoint + primary keyline + N parallel lines."""
-    from app.services.design_generator import download_raster, generate_keyline_parallels
+    """Keypoints of the valleys in the parcel, keylines and parallels covering it."""
+    from rasterio import features
+    from rasterio.warp import transform_geom
+    from shapely.geometry import mapping, shape
+    from app.services.design_generator import download_raster
 
     dem = download_raster(req.parcel_id, auth.tenant_id, "breached.tif")
     accum = download_raster(req.parcel_id, auth.tenant_id, "accum.tif")
@@ -97,26 +123,57 @@ def generate_keyline(
     dem_arr, transform, crs = _read_dem(dem)
     accum_arr, _, _ = _read_dem(accum)
 
-    kl_res = detect_keyline(dem_arr, transform, accum_arr)
-    if not kl_res:
+    cell_m = max(abs(transform.a), abs(transform.e))
+    if cell_m > MAX_KEYLINE_CELL_M:
+        return {
+            "status": "terrain_too_coarse",
+            "detail": f"DEM cell size {cell_m:.1f} m exceeds {MAX_KEYLINE_CELL_M:.0f} m",
+            "cell_size_m": cell_m,
+            "max_cell_size_m": MAX_KEYLINE_CELL_M,
+        }
+
+    parcel_wgs = _parcel_polygon(req.parcel_id, auth.tenant_id)
+    if parcel_wgs is None:
+        return {"status": "no_data", "detail": "Parcel has no polygon"}
+    parcel_utm = shape(transform_geom("EPSG:4326", crs, mapping(parcel_wgs)))
+    parcel_mask = features.rasterize(
+        [(mapping(parcel_utm), 1)], out_shape=dem_arr.shape,
+        transform=transform, fill=0, dtype="uint8",
+    ).astype(bool)
+
+    kps = detect_keypoints(dem_arr, transform, accum_arr, parcel_mask)
+    if not kps:
         return {"status": "no_keypoint", "detail": "No keypoint found in this parcel"}
 
-    keypoint = kl_res["keypoint"]
-    keyline = kl_res["keyline"]
-    parallels = generate_keyline_parallels(
-        dem, keyline["coordinates"], req.spacing, req.lines, req.grade
+    keylines = [trace_keyline(dem_arr, transform, kp, req.grade, parcel_mask) for kp in kps]
+    pattern = keyline_pattern(
+        keylines, req.spacing, parcel_utm, max_lines=req.lines, grade=req.grade,
     )
 
-    # Reproject all geometry UTM -> WGS84 (parallels computed in UTM first).
-    keypoint["coordinates"] = _to_wgs84(keypoint["coordinates"], crs)
-    keyline["coordinates"] = _to_wgs84(keyline["coordinates"], crs)
-    for p in parallels["parallels"]:
-        p["geometry"]["coordinates"] = _to_wgs84(p["geometry"]["coordinates"], crs)
+    def _line_wgs(g) -> dict:
+        return {"type": "LineString", "coordinates": _to_wgs84([list(c) for c in g.coords], crs)}
 
+    keypoints = [
+        {"type": "Point", "coordinates": _to_wgs84([kp["x"], kp["y"], kp["z"]], crs)}
+        for kp in kps
+    ]
+    keyline_geoms = [_line_wgs(g) for g in keylines if not g.is_empty]
+    parallels = [
+        {
+            "geometry": _line_wgs(p["geometry"]),
+            "grade": p["grade"],
+            "direction": p["direction"],
+            "offset_m": p["offset_m"],
+        }
+        for p in pattern
+        if p["direction"] in ("up", "down")
+    ]
     return {
-        "keypoint": keypoint,
-        "keyline": keyline,
-        "parallel_lines": parallels["parallels"],
+        "keypoint": keypoints[0],
+        "keyline": keyline_geoms[0] if keyline_geoms else None,
+        "keypoints": keypoints,
+        "keylines": keyline_geoms,
+        "parallel_lines": parallels,
         "request": req.model_dump(),
         "status": "ok",
     }
