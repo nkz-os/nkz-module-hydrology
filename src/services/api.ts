@@ -88,6 +88,30 @@ export interface ParcelSummaryKpis {
   soilMoisture?: number;
 }
 
+export type CalculationMode = 'storm' | 'retention';
+export type ReturnPeriod = 10 | 25 | 100;
+
+export interface ParcelSettings {
+  mode: CalculationMode;
+  return_period_years: ReturnPeriod;
+  is_default: boolean;
+  updated_by?: string | null;
+  updated_at?: string | null;
+}
+
+/** Design rain behind the numbers of the latest record (absent on legacy records). */
+export interface DesignInfo {
+  calculationMode?: CalculationMode;
+  returnPeriodYears?: number;
+  designRainMm?: number;
+  designRainCiLowMm?: number;
+  designRainCiHighMm?: number;
+  designRainLowConfidence?: boolean;
+  designRainSource?: string;
+  designRainStatus?: 'ok' | 'not_available' | string;
+  designRainReason?: string;
+}
+
 export interface ParcelSummary {
   status?: 'no_data' | string;
   observedAt?: string | null;
@@ -96,6 +120,7 @@ export interface ParcelSummary {
   soilSource?: string | null;
   vegetationSource?: string | null;
   kpis?: ParcelSummaryKpis;
+  design?: DesignInfo;
 }
 
 export interface KeylineRequest {
@@ -245,8 +270,18 @@ export interface ScenarioKpi {
   reliability_pct: number;
 }
 
+export interface RetentionYear {
+  extraStoredM3: number;
+  extraSummerDays: number;
+  baselineSummerDays: number;
+}
+
 export interface ScenarioComparison {
-  status?: 'ok' | 'no_data' | string;
+  status?: 'ok' | 'no_data' | 'not_available' | string;
+  mode?: CalculationMode | null;
+  returnPeriodYears?: number | null;
+  reason?: string;
+  retention?: { median: RetentionYear; dry: RetentionYear };
   baseline?: ScenarioKpi;
   intervention?: ScenarioKpi;
   comparison?: Array<{ name: string } & ScenarioKpi>;
@@ -272,6 +307,15 @@ export const api = {
   analyzeParcel: (parcelId: string) =>
     post<AnalyzeResponse>(`/analyze/${encodeURIComponent(parcelId)}`, {}),
   getJob: (jobId: string) => get<JobStatus>(`/jobs/${encodeURIComponent(jobId)}`),
+
+  // Per-parcel calculation settings (PUT: technicians and admins only)
+  getSettings: (parcelId: string) =>
+    get<ParcelSettings>(`/parcels/${encodeURIComponent(parcelId)}/settings`),
+  putSettings: (parcelId: string, mode: CalculationMode, returnPeriodYears: ReturnPeriod) =>
+    put<ParcelSettings>(`/parcels/${encodeURIComponent(parcelId)}/settings`, {
+      mode,
+      return_period_years: returnPeriodYears,
+    }),
 
   // Zones
   getZones: (parcelId: string) => get<ZoneKpi[]>(`/parcels/${encodeURIComponent(parcelId)}/zones`),

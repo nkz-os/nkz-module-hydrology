@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ScenarioComparison } from '../services/api';
+import { api, RetentionYear, ScenarioComparison } from '../services/api';
 
 interface Props {
   parcelId: string;
@@ -31,6 +31,51 @@ const ScenarioPanel: React.FC<Props> = ({ parcelId, refreshKey }) => {
   }, [parcelId, refreshKey]);
 
   if (loading) return <p className="text-nkz-muted text-sm">{t('hydrology:loading')}</p>;
+  if (data?.status === 'not_available') {
+    return (
+      <p className="text-amber-500 text-xs">
+        {t('hydrology:scenarioNotAvailable', { reason: data.reason ?? '-' })}
+      </p>
+    );
+  }
+  if (data?.mode === 'retention' && data.retention) {
+    const ry = [
+      { key: 'scenarioRetentionMedian', y: data.retention.median },
+      { key: 'scenarioRetentionDry', y: data.retention.dry },
+    ];
+    const rrows = [
+      { key: 'scenarioExtraStored', pick: (y: RetentionYear) => y.extraStoredM3, digits: 0 },
+      { key: 'scenarioBaselineSummerDays', pick: (y: RetentionYear) => y.baselineSummerDays, digits: 0 },
+      { key: 'scenarioExtraSummerDays', pick: (y: RetentionYear) => y.extraSummerDays, digits: 0 },
+    ];
+    return (
+      <div className="text-xs">
+        <p className="text-[10px] text-nkz-muted mb-2">{t('hydrology:modeRetention')}</p>
+        <table className="w-full">
+          <thead>
+            <tr className="text-nkz-muted">
+              <th className="text-left font-normal">{t('hydrology:scenarioMetric')}</th>
+              {ry.map((c) => (
+                <th key={c.key} className="text-right font-normal">{t(`hydrology:${c.key}`)}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rrows.map((r) => (
+              <tr key={r.key} className="border-t border-nkz-border">
+                <td className="py-0.5">{t(`hydrology:${r.key}`)}</td>
+                {ry.map((c) => (
+                  <td key={c.key} className="text-right text-nkz-accent-base font-medium">
+                    {r.pick(c.y).toFixed(r.digits)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
   if (!data || data.status === 'no_data' || !data.intervention || !data.baseline) {
     return <p className="text-nkz-muted text-sm">{t('hydrology:scenarioNoData')}</p>;
   }
@@ -48,6 +93,11 @@ const ScenarioPanel: React.FC<Props> = ({ parcelId, refreshKey }) => {
 
   return (
     <div className="text-xs">
+      {data.mode === 'storm' && data.returnPeriodYears != null && (
+        <p className="text-[10px] text-nkz-muted mb-2">
+          {t('hydrology:modeStorm')}: {t('hydrology:returnPeriodYears', { years: data.returnPeriodYears })}
+        </p>
+      )}
       <table className="w-full">
         <thead>
           <tr className="text-nkz-muted">

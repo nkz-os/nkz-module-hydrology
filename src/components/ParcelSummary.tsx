@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { DesignLabel } from './CalculationModeControl';
 import { api, ParcelSummary as ParcelSummaryData, DataFidelity } from '../services/api';
 
 interface Props {
@@ -81,6 +82,7 @@ const ParcelSummary: React.FC<Props> = ({ parcelId, refreshKey }) => {
           </span>
         )}
       </div>
+      <DesignLabel design={summary.design} />
       <div className="grid grid-cols-3 gap-2 mb-2">
         {cells.map((c) => (
           <div key={c.labelKey}>
