@@ -142,3 +142,32 @@ def test_history_all_failed_raises(secret, monkeypatch):
     monkeypatch.setattr(weather_client.httpx, "get", fake_get)
     with pytest.raises(WeatherUnavailable):
         WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2003)
+
+
+def test_history_stops_after_consecutive_failures(secret, monkeypatch):
+    seen = []
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        seen.append(params["start"])
+        return httpx.Response(503, text="down")
+
+    monkeypatch.setattr(weather_client.httpx, "get", fake_get)
+    with pytest.raises(WeatherUnavailable):
+        WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2005)
+    assert len(seen) == weather_client.MAX_CONSECUTIVE_FAILED_YEARS == 3
+
+
+def test_history_success_resets_the_failure_count(secret, monkeypatch):
+    def fake_get(url, params=None, headers=None, timeout=None):
+        if params["start"][:4] in ("2001", "2002", "2004", "2005"):
+            return httpx.Response(500, text="x")
+        return httpx.Response(200, json=_year_body(params["start"][:4]))
+
+    monkeypatch.setattr(weather_client.httpx, "get", fake_get)
+    out = WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2005)
+    assert {d.day.year for d in out} == {2003}
+
+
+def test_history_empty_year_is_a_success_with_no_rows(secret, monkeypatch):
+    monkeypatch.setattr(weather_client.httpx, "get", lambda *a, **k: httpx.Response(200, json={"days": []}))
+    assert WeatherClient(base_url="http://wm", daily_url="http://wa").fetch_daily_history("p1", "t1", 2001, 2005) == []
