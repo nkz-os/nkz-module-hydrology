@@ -28,6 +28,13 @@ _SUMMARY_KPIS = (
     "etoMm", "precipitationMm", "temperatureAvg", "temperatureMin", "soilMoisture",
 )
 
+# Calculation mode and the design rain behind the numbers, for labelling tables.
+_SUMMARY_DESIGN = (
+    "calculationMode", "returnPeriodYears", "designRainMm", "designRainCiLowMm",
+    "designRainCiHighMm", "designRainLowConfidence", "designRainSource",
+    "designRainStatus", "designRainReason",
+)
+
 
 def _record_date(entity: dict) -> str:
     """Tolerant dateObserved parse: keyValues may return a plain ISO string OR a
@@ -134,6 +141,12 @@ def get_parcel_summary(
         if val is not None:
             kpis[name] = val
 
+    design = {
+        name: val
+        for name in _SUMMARY_DESIGN
+        if (val := _get_attr(latest, name)) is not None
+    }
+
     return {
         "observedAt": _record_date(latest) or None,
         "dataFidelity": _get_attr(latest, "dataFidelity"),
@@ -141,6 +154,7 @@ def get_parcel_summary(
         "soilSource": _get_attr(latest, "soilSource"),
         "vegetationSource": _get_attr(latest, "vegetationSource"),
         "kpis": kpis,
+        "design": design,
     }
 
 

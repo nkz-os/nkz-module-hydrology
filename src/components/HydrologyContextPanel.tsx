@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useViewer } from '@nekazari/sdk';
 import { api } from '../services/api';
 import ZonalKpiTable from './ZonalKpiTable';
+import CalculationModeControl from './CalculationModeControl';
 import ParcelSummary from './ParcelSummary';
 import KeylineDesigner from './KeylineDesigner';
 import PondSitingTool from './PondSitingTool';
@@ -124,6 +125,11 @@ const HydrologyContextPanel: React.FC = () => {
       </div>
       {activeTab === 'kpis' && (
         <>
+          <CalculationModeControl
+            parcelId={parcelId}
+            onRerun={runAnalysis}
+            analysisRunning={analysis === 'running'}
+          />
           <ParcelSummary parcelId={parcelId} refreshKey={refreshKey} />
           <ZonalKpiTable
             key={refreshKey}

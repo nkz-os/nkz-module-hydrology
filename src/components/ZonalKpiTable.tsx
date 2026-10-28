@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, ZoneKpi } from '../services/api';
+import { api, DesignInfo, ZoneKpi } from '../services/api';
+import { DesignLabel } from './CalculationModeControl';
 
 interface Props {
   parcelId: string;
@@ -11,11 +12,13 @@ interface Props {
 const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunning }) => {
   const { t } = useTranslation();
   const [zones, setZones] = useState<ZoneKpi[]>([]);
+  const [design, setDesign] = useState<DesignInfo | undefined>(undefined);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!parcelId) { setLoading(false); return; }
     setLoading(true);
+    api.getSummary(parcelId).then((s) => setDesign(s.design)).catch(() => setDesign(undefined));
     api.getZones(parcelId).then(setZones).catch(() => setZones([])).finally(() => setLoading(false));
   }, [parcelId]);
 
@@ -36,6 +39,8 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunni
   );
 
   return (
+    <>
+    <DesignLabel design={design} />
     <table className="w-full text-xs">
       <thead>
         <tr className="text-nkz-muted">
@@ -60,6 +65,7 @@ const ZonalKpiTable: React.FC<Props> = ({ parcelId, onRunAnalysis, analysisRunni
         ))}
       </tbody>
     </table>
+    </>
   );
 };
 

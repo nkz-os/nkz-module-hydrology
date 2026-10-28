@@ -11,6 +11,7 @@ Contract reference: AGENTS §8 — precedence meteo.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -41,6 +42,22 @@ class ParcelWeather:
     precipitation_mm: float | None    # mm, last closed day (weather-api)
     soil_moisture: float | None       # m³/m³
     fidelity: str                     # "parcel_weather" | "unavailable"
+
+
+@dataclass(frozen=True)
+class DailyWater:
+    """One day of rain and ET0 from weather-api (None where the series has a gap)."""
+    day: date
+    precip_mm: float | None
+    et0_mm: float | None
+
+
+# Stop reading the history after this many failed years in a row (weather-api down).
+MAX_CONSECUTIVE_FAILED_YEARS = 3
+# A year of history can be slow upstream (gap filling): per-request timeout, and an
+# overall deadline so 30 slow years cannot hold the job for ever.
+HISTORY_REQUEST_TIMEOUT_S = 30.0
+HISTORY_TOTAL_DEADLINE_S = 240.0
 
 
 # Default metrics requested from weather-map /stats endpoint.
@@ -157,6 +174,67 @@ class WeatherClient:
         if not rows:
             raise WeatherUnavailable(f"weather-api: no daily row for {day.isoformat()}")
         return rows[0].get("precip_mm"), rows[0].get("et0_mm")
+
+    def fetch_daily_history(
+        self, parcel_id: str, tenant_id: str, first_year: int, last_year: int,
+    ) -> list[DailyWater]:
+        """Daily rain and ET0 for ``first_year``..``last_year``, one request per year.
+
+        One request per calendar year keeps each under weather-api's 400-day limit.
+        A year that fails is skipped and logged; a year answered with 200 and no
+        rows counts as a success with no rows. After
+        ``MAX_CONSECUTIVE_FAILED_YEARS`` failures in a row the read stops (a
+        success resets the count).
+
+        Raises:
+            WeatherUnavailable: when every year failed, the consecutive limit is hit or
+                ``HISTORY_TOTAL_DEADLINE_S`` elapsed (a partial history is not returned).
+        """
+        short = parcel_id.rsplit(":", 1)[-1]
+        url = f"{self._daily}/api/weather/parcel/{short}/daily"
+        out: list[DailyWater] = []
+        failed = 0
+        consecutive = 0
+        years = list(range(first_year, last_year + 1))
+        started = time.monotonic()
+        for year in years:
+            if time.monotonic() - started > HISTORY_TOTAL_DEADLINE_S:
+                logger.error("daily history deadline of %.0f s exceeded at year=%s tenant=%s parcel=%s",
+                             HISTORY_TOTAL_DEADLINE_S, year, tenant_id, short)
+                raise WeatherUnavailable(
+                    f"weather-api: daily history exceeded {HISTORY_TOTAL_DEADLINE_S:.0f} s")
+            params = {"start": f"{year}-01-01", "end": f"{year}-12-31", "fill": "open_meteo"}
+            try:
+                resp = httpx.get(url, params=params, headers=self._headers(tenant_id),
+                                timeout=HISTORY_REQUEST_TIMEOUT_S)
+                if resp.status_code != 200:
+                    raise WeatherUnavailable(f"weather-api {resp.status_code}: {resp.text[:200]}")
+                rows = (resp.json() or {}).get("days") or []
+                year_days = [
+                    DailyWater(
+                        date.fromisoformat(str(r["date"])[:10]),
+                        None if r.get("precip_mm") is None else float(r["precip_mm"]),
+                        None if r.get("et0_mm") is None else float(r["et0_mm"]),
+                    )
+                    for r in rows
+                ]
+            except (httpx.HTTPError, WeatherUnavailable, ValueError, KeyError, TypeError) as exc:
+                failed += 1
+                consecutive += 1
+                logger.warning("daily history skipped year=%s tenant=%s parcel=%s: %s",
+                               year, tenant_id, short, exc)
+                if consecutive >= MAX_CONSECUTIVE_FAILED_YEARS:
+                    logger.error("daily history aborted after %s consecutive failed years "
+                                 "tenant=%s parcel=%s last_error=%s",
+                                 consecutive, tenant_id, short, exc)
+                    raise WeatherUnavailable(
+                        f"weather-api: {consecutive} consecutive years failed: {exc}") from exc
+                continue
+            consecutive = 0
+            out.extend(year_days)
+        if years and failed == len(years):
+            raise WeatherUnavailable(f"weather-api: daily history failed for all {failed} years")
+        return out
 
     # ── forecast ──────────────────────────────────────────────────────────
 

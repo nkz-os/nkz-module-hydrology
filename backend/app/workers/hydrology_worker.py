@@ -22,7 +22,7 @@ from typing import Any
 import numpy as np
 import rasterio
 from shapely.geometry import shape as shply_shape
-from nkz_platform_sdk import OrionClient
+from nkz_platform_sdk import OrionClient, SyncOrionClient
 
 from app.config import get_settings
 from app.services.dem_client import DEMClient, DEMGrid, DEMUnavailable, resolution_for_area_ha
@@ -30,7 +30,13 @@ from app.services.lidar_dem import LidarAsset, fetch_dtm_bytes, find_latest_lida
 from app.services.entity_publisher import build_hydrology_record, build_hydrology_zones
 from app.services.geolibre_engine import GeoLibreEngine
 from app.services.utm import reproject_grid_to_utm
-from app.services.weather_client import WeatherClient, WeatherUnavailable, ParcelWeather
+from app.services.weather_client import DailyWater, WeatherClient, WeatherUnavailable, ParcelWeather
+from app.services import design_cache
+from app.services.design_rain import DesignDepth, design_depth_24h
+from app.services.design_storm import SUBDAILY_SHAPE_SOURCE, alternating_block_hyetograph, design_storm_response
+from app.services.parcel_settings import ParcelSettings, load_settings
+from app.services.retention import RetentionResult, simulate_retention
+from app.services.scenario_compute import fetch_parcel_designs_strict
 from app.services.bucket_model import BucketModel
 from app.services.scs_cn import runoff
 from app.services.musle import musle_sediment, ls_from_slope, c_from_ndvi
@@ -200,10 +206,22 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     tc_h = (0.0195 * (stream_len ** 0.77) / (slope_frac ** 0.385)) / 60.0
     tc_h = max(0.1, min(tc_h, 24.0))  # clamp to sensible range
 
-    # 1. SCS-CN
-    run_mm, peak_m3s = runoff(precip, soil.cn, area_ha=area_ha, tc_h=tc_h)
-    metrics["runoffMm"] = run_mm
-    metrics["peakFlowM3s"] = peak_m3s
+    # 1. Runoff and peak flow in the parcel's calculation mode
+    try:
+        settings_ = load_settings(tenant_id or "platform", parcel_id)
+    except Exception:
+        # no known mode: publish none rather than a guessed one; terrain KPIs still go out
+        logger.exception("[%s] parcel settings unreadable", job_id)
+        design = {"mode": None, "status": "not_available", "hyetograph": None, "season_runoff_mm": None,
+                  "record": {"designRainStatus": "not_available", "designRainReason": "settings unreadable"}}
+    else:
+        design = _design_inputs(parcel_id, tenant_id or "platform", settings_, soil, area_ha, job_id)
+    metrics.update(design["record"])
+    run_mm, peak_m3s = _mode_runoff(design, soil.cn, area_ha, tc_h)
+    if run_mm is not None:
+        metrics["runoffMm"] = run_mm
+    if peak_m3s is not None:
+        metrics["peakFlowM3s"] = peak_m3s
 
     # 2. Bucket Model
     bucket = BucketModel(ksat_mmh=soil.ksat_mmh, field_capacity_vv=soil.field_capacity_vv,
@@ -214,22 +232,24 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
     # 3. MUSLE
     ls_fact = ls_from_slope(_slope_deg_to_pct(slope_mean))
     c_fact = c_from_ndvi(ndvi_mean)
-    runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0
-    sediment = musle_sediment(runoff_m3, peak_m3s, soil.k_factor, ls_fact, c_fact)
-    metrics["sedimentYieldTonnes"] = sediment
+    runoff_m3 = (run_mm / 1000.0) * area_ha * 10_000.0 if run_mm is not None else None
+    storm = design["mode"] == "storm"
+    if storm and runoff_m3 is not None and peak_m3s is not None:
+        metrics["sedimentYieldTonnes"] = musle_sediment(runoff_m3, peak_m3s, soil.k_factor, ls_fact, c_fact)
 
-    # 4. Pond Viability
-    try:
-        earthwork = max(100.0, runoff_m3 * 0.5)
-        ps = pond_score(
-            catchment_yield_m3=runoff_m3,
-            earthwork_m3=earthwork,
-            reliability_pct=80.0,
-            ksat_mmh=soil.ksat_mmh,
-        )
-        metrics["pondViability"] = ps["pondScore"]
-    except Exception as e:
-        logger.warning("[%s] pond_score failed: %s", job_id, e)
+    # 4. Pond Viability (storm only: sized against a design storm)
+    if storm and runoff_m3 is not None:
+        try:
+            earthwork = max(100.0, runoff_m3 * 0.5)
+            ps = pond_score(
+                catchment_yield_m3=runoff_m3,
+                earthwork_m3=earthwork,
+                reliability_pct=80.0,
+                ksat_mmh=soil.ksat_mmh,
+            )
+            metrics["pondViability"] = ps["pondScore"]
+        except Exception as e:
+            logger.warning("[%s] pond_score failed: %s", job_id, e)
 
     # 5. Keyline Guide
     try:
@@ -264,9 +284,11 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
             z_slope = zone.get("slopeMean", slope_mean)
             z_area_ha = zone.get("areaHa", area_ha / max(len(zones_raw), 1))
 
-            z_run_mm, z_peak_m3s = runoff(precip, soil.cn, area_ha=z_area_ha, tc_h=tc_h)
-            zone["nkz:runoffMm"] = z_run_mm
-            zone["nkz:peakFlowM3s"] = z_peak_m3s
+            z_run_mm, z_peak_m3s = _mode_runoff(design, soil.cn, z_area_ha, tc_h)
+            if z_run_mm is not None:
+                zone["nkz:runoffMm"] = z_run_mm
+            if z_peak_m3s is not None:
+                zone["nkz:peakFlowM3s"] = z_peak_m3s
 
             bucket_z = BucketModel(
                 ksat_mmh=soil.ksat_mmh,
@@ -276,18 +298,19 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
             bz = bucket_z.step(precip, eto, cn=soil.cn)
             zone["nkz:soilSaturationPct"] = bz["saturation_pct"]
 
-            z_slope_len = max(10.0, min(200.0, (z_area_ha * 10000.0) ** 0.5))
-            z_ls = ls_from_slope(_slope_deg_to_pct(z_slope), slope_length_m=z_slope_len)
-            z_runoff_m3 = (z_run_mm / 1000.0) * z_area_ha * 10000.0
-            z_sed = musle_sediment(z_runoff_m3, z_peak_m3s, soil.k_factor, z_ls, c_fact)
-            zone["nkz:sedimentYieldTonnes"] = z_sed
-
-            try:
-                z_ew = max(100.0, z_runoff_m3 * 0.5)
-                z_ps = pond_score(z_runoff_m3, z_ew, 80.0, soil.ksat_mmh)
-                zone["nkz:pondViability"] = z_ps["pondScore"]
-            except Exception:
-                pass
+            if storm and z_run_mm is not None:
+                z_runoff_m3 = (z_run_mm / 1000.0) * z_area_ha * 10000.0
+                if z_peak_m3s is not None:
+                    z_slope_len = max(10.0, min(200.0, (z_area_ha * 10000.0) ** 0.5))
+                    z_ls = ls_from_slope(_slope_deg_to_pct(z_slope), slope_length_m=z_slope_len)
+                    zone["nkz:sedimentYieldTonnes"] = musle_sediment(
+                        z_runoff_m3, z_peak_m3s, soil.k_factor, z_ls, c_fact)
+                try:
+                    z_ew = max(100.0, z_runoff_m3 * 0.5)
+                    z_ps = pond_score(z_runoff_m3, z_ew, 80.0, soil.ksat_mmh)
+                    zone["nkz:pondViability"] = z_ps["pondScore"]
+                except Exception:
+                    pass
 
             zone["nkz:keylineGrade"] = metrics.get("keylineGrade", 0.0)
 
@@ -366,6 +389,150 @@ def _merge_weather_metrics(metrics: dict, weather: ParcelWeather) -> None:
     if weather.soil_moisture is not None:
         metrics["soilMoisture"] = weather.soil_moisture
 
+
+
+# ── calculation modes ────────────────────────────────────────────────────────
+
+_HISTORY_YEARS = 30  # target length of the rain history (last full years)
+_RETENTION_KEY_T = 0  # the retention history does not depend on the return period
+
+
+class _DesignNotAvailable(Exception):
+    """The history cannot support the design figures; never cached."""
+
+
+def _drop_cache(tenant_id: str, parcel_id: str) -> None:
+    design_cache.invalidate(tenant_id, parcel_id)
+
+
+def _history_to_json(history: list[DailyWater]) -> list[list]:
+    return [[d.day.isoformat(), d.precip_mm, d.et0_mm] for d in history]
+
+
+def _history_from_json(rows: list[list]) -> list[DailyWater]:
+    from datetime import date
+    return [DailyWater(date.fromisoformat(r[0]), r[1], r[2]) for r in rows]
+
+
+def _design_inputs(
+    parcel_id: str, tenant_id: str, settings: ParcelSettings, soil, area_ha: float, job_id: str,
+) -> dict:
+    """Mode-specific design figures from the rain history, cached per key.
+
+    Returns ``{"mode", "status", "record", "hyetograph", "season_runoff_mm"}``. When the
+    history is missing or too short ``status`` is ``not_available`` with the reason in
+    ``record``: nothing is estimated, the terrain results are still published.
+    """
+    mode = settings.mode
+    record: dict = {"calculationMode": mode}
+    if mode == "storm":
+        record["returnPeriodYears"] = settings.return_period_years
+    out: dict = {"mode": mode, "status": "not_available", "record": record,
+                 "hyetograph": None, "season_runoff_mm": None}
+    last_full_year = datetime.now(timezone.utc).year - 1
+
+    def _fetch() -> list[DailyWater]:
+        try:
+            return WeatherClient().fetch_daily_history(
+                parcel_id, tenant_id, last_full_year - _HISTORY_YEARS + 1, last_full_year)
+        except WeatherUnavailable as exc:
+            raise _DesignNotAvailable(f"rain history unavailable: {exc}") from exc
+
+    def _unavailable(reason: str) -> dict:
+        logger.warning("[%s] design rain not available (%s): %s", job_id, mode, reason)
+        record["designRainStatus"] = "not_available"
+        record["designRainReason"] = reason
+        return out
+
+    try:
+        if mode == "storm":
+            def _compute() -> dict:
+                depth = design_depth_24h(_fetch(), settings.return_period_years)
+                if depth.status != "ok":
+                    raise _DesignNotAvailable(depth.reason or "design depth not available")
+                return dataclasses.asdict(depth)
+
+            cached = design_cache.get_or_compute(
+                tenant_id, parcel_id, mode, settings.return_period_years, last_full_year, _compute)
+            try:
+                depth = DesignDepth(**cached)
+            except (TypeError, ValueError) as exc:
+                logger.warning("[%s] malformed design cache, recomputing: %s", job_id, exc)
+                depth = DesignDepth(**_compute())
+            record.update({
+                "designRainStatus": "ok",
+                "designRainMm": depth.depth_mm,
+                "designRainCiLowMm": depth.ci_low_mm,
+                "designRainCiHighMm": depth.ci_high_mm,
+                "designRainLowConfidence": depth.low_confidence,
+                "designRainSource": f"{depth.source}; {SUBDAILY_SHAPE_SOURCE}",
+            })
+            out["hyetograph"] = alternating_block_hyetograph(depth.depth_mm)
+        else:
+            def _load(use_cache: bool) -> RetentionResult:
+                def _compute() -> dict:
+                    return {"history": _history_to_json(_fetch())}
+
+                if use_cache:
+                    cached = design_cache.get_or_compute(
+                        tenant_id, parcel_id, mode, _RETENTION_KEY_T, last_full_year, _compute)
+                else:
+                    cached = _compute()
+                history = _history_from_json(cached["history"])
+                try:
+                    with SyncOrionClient(tenant_id) as orion:
+                        designs = fetch_parcel_designs_strict(orion, parcel_id)
+                except Exception as exc:
+                    # zero designs would publish a false "no extra water": say so instead
+                    raise _DesignNotAvailable("designs unreadable") from exc
+                return simulate_retention(history, soil, designs, area_ha)
+
+            try:
+                res = _load(True)
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                logger.warning("[%s] malformed history cache, refetching: %s", job_id, exc)
+                res = _load(False)
+            if res.status != "ok":
+                # a gappy history must not stick in the cache until next year
+                _drop_cache(tenant_id, parcel_id)
+                raise _DesignNotAvailable(res.reason or "retention not available")
+            record.update({
+                "designRainStatus": "ok",
+                "designRainSource": "reanalysis",
+                "retentionStoredM3": res.median.stored_m3,
+                "retentionSummerDays": res.median.summer_days_above_threshold,
+                "retentionDryStoredM3": res.dry.stored_m3,
+                "retentionDrySummerDays": res.dry.summer_days_above_threshold,
+                "retentionExtraStoredM3": res.median.extra_m3_vs_baseline,
+                "retentionExtraSummerDays": res.median.extra_days_vs_baseline,
+                "retentionBaselineSummerDays": (
+                    res.median.summer_days_above_threshold - res.median.extra_days_vs_baseline),
+                "retentionDryExtraStoredM3": res.dry.extra_m3_vs_baseline,
+                "retentionDryExtraSummerDays": res.dry.extra_days_vs_baseline,
+                "retentionDryBaselineSummerDays": (
+                    res.dry.summer_days_above_threshold - res.dry.extra_days_vs_baseline),
+            })
+            out["season_runoff_mm"] = res.median.season_runoff_mm
+    except _DesignNotAvailable as exc:
+        return _unavailable(str(exc))
+    except Exception as exc:
+        logger.exception("[%s] design computation failed", job_id)
+        return _unavailable(f"design computation failed: {type(exc).__name__}")
+    out["status"] = "ok"
+    return out
+
+
+def _mode_runoff(design: dict, cn: float, area_ha: float, tc_h: float) -> tuple[float | None, float | None]:
+    """``(runoff_mm, peak_m3s)`` for the calculation mode; ``None`` when not available.
+
+    Storm: design hyetograph through the unit hydrograph. Retention: the
+    median year's summed daily runoff; no peak flow (not meaningful for a seasonal total).
+    """
+    if design["status"] != "ok":
+        return None, None
+    if design["mode"] == "storm":
+        return design_storm_response(design["hyetograph"], cn, area_ha, tc_h)
+    return design["season_runoff_mm"], None
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

@@ -124,3 +124,28 @@ def test_summary_requires_auth():
     client = TestClient(app)
     resp = client.get("/parcels/p1/summary")
     assert resp.status_code == 401
+
+
+def test_summary_carries_calculation_mode_and_design_rain():
+    rec = _hydro_record(
+        "2026-07-16T00:00:00Z",
+        **{
+            "nkz:calculationMode": "storm",
+            "nkz:returnPeriodYears": 25,
+            "nkz:designRainMm": 86.0,
+            "nkz:designRainLowConfidence": False,
+            "nkz:designRainSource": "reanalysis",
+            "nkz:designRainStatus": "ok",
+        },
+    )
+    design = _call([rec])["design"]
+    assert design["calculationMode"] == "storm"
+    assert design["returnPeriodYears"] == 25
+    assert design["designRainMm"] == 86.0
+    assert design["designRainLowConfidence"] is False
+    assert "designRainReason" not in design
+
+
+def test_summary_design_empty_for_legacy_record():
+    rec = _hydro_record("2026-07-16T00:00:00Z", **{"nkz:twiMean": 7.5})
+    assert _call([rec])["design"] == {}
