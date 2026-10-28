@@ -52,7 +52,7 @@ def annual_maxima(history: list[DailyWater]) -> dict[int, float]:
     """Max daily rain per complete hydrological year (>= 90 % of days with a value)."""
     days: dict[int, dict[date, float]] = defaultdict(dict)
     for item in history:
-        if item.precip_mm is not None:
+        if item.precip_mm is not None and math.isfinite(item.precip_mm):
             days[_hydro_year(item.day)][item.day] = float(item.precip_mm)
     out: dict[int, float] = {}
     for year, vals in days.items():
