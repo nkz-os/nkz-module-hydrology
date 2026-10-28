@@ -24,7 +24,8 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   // were generated with, not what the inputs hold now.
   const [sentParams, setSentParams] = useState<{ grade: number; spacing: number; lines: number | null; min_line_m: number } | null>(null);
 
-  const linesValue = lines.trim() === '' || !(Number(lines) > 0) ? null : Math.floor(Number(lines));
+  // Empty = no limit (null); 0 = the keylines only; n = n rows of lines out from them.
+  const linesValue = lines.trim() === '' || !(Number(lines) >= 0) ? null : Math.floor(Number(lines));
   const minLineValue = minLine > 0 ? minLine : 100;
 
   const statusMessage = (): string | null => {
@@ -45,7 +46,8 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   // pattern line. A pattern may hold guides only, with no keyline at all.
   const keylineGeoms: any[] = result?.keylines?.length ? result.keylines : result?.keyline ? [result.keyline] : [];
   const patternGeoms: any[] = (result?.parallel_lines || []).map((p: any) => p.geometry);
-  const hasLines = result?.status === 'ok' && keylineGeoms.length + patternGeoms.length > 0;
+  const designGeoms: any[] = [...keylineGeoms, ...patternGeoms];
+  const hasLines = result?.status === 'ok' && designGeoms.length > 0;
 
   const generate = async () => {
     setLoading(true);
@@ -61,12 +63,16 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
 
       const geoms: DesignGeometry[] = [];
       const mains = res.keylines?.length ? res.keylines : res.keyline ? [res.keyline] : [];
+      const mainKey = res.keyline ? JSON.stringify(res.keyline.coordinates) : null;
+      let primaryShown = false;
       mains.forEach((g, i) => {
+        const primary = !primaryShown && JSON.stringify(g.coordinates) === mainKey;
+        primaryShown = primaryShown || primary;
         geoms.push({
           id: `keyline-primary-${i}`,
           type: 'keyline',
           geometry: g,
-          label: t('hydrology:primaryKeyline'),
+          label: t(primary ? 'hydrology:primaryKeyline' : 'hydrology:keyline'),
         });
       });
       const points = res.keypoints?.length ? res.keypoints : res.keypoint ? [res.keypoint] : [];
@@ -89,7 +95,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
 
   const save = async () => {
     if (!hasLines || !sentParams) return;
-    const coordinates: number[][][] = [...keylineGeoms, ...patternGeoms].map((g: any) => g.coordinates);
+    const coordinates: number[][][] = designGeoms.map((g: any) => g.coordinates);
     setSaving(true);
     try {
       const { id } = await api.saveDesign({
@@ -122,7 +128,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
       </div>
       <div>
         <label className="text-xs text-nkz-muted">{t('hydrology:lines')}</label>
-        <input type="number" min={1} value={lines} onChange={(e) => setLines(e.target.value)}
+        <input type="number" min={0} value={lines} onChange={(e) => setLines(e.target.value)}
                placeholder={t('hydrology:keylineCoverParcel')}
                className="w-full border rounded px-2 py-1 text-sm" />
       </div>
@@ -157,7 +163,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
               {saving ? t('hydrology:loading') : savedId ? t('hydrology:saved') : t('hydrology:save')}
             </button>
           </div>
-          <ExportMenu designType="keyline" geometry={{ type: 'MultiLineString', coordinates: (keylineGeoms.length ? keylineGeoms : patternGeoms).map((g: any) => g.coordinates) }} designId={savedId} />
+          <ExportMenu designType="keyline" geometry={{ type: 'MultiLineString', coordinates: designGeoms.map((g: any) => g.coordinates) }} designId={savedId} />
         </>
       )}
     </div>
