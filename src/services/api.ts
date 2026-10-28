@@ -117,7 +117,8 @@ export interface KeylineResponse {
   parallel_lines?: Array<{
     geometry: { type: 'LineString'; coordinates: number[][] };
     grade: number;
-    direction: 'up' | 'down';
+    /** 'extension': the keyline's own track, continued straight past where the terrain ends it. */
+    direction: 'up' | 'down' | 'extension';
     offset_m?: number;
   }>;
   request?: KeylineRequest;
