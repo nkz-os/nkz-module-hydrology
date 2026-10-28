@@ -114,6 +114,20 @@ def _parcel_polygon(parcel_id: str, tenant_id: str):
     return None if poly.is_empty else poly
 
 
+def _polygonal(geom):
+    """The polygonal part of `geom` made valid (a self-crossing ring becomes
+    the polygons it encloses), or None when no area is left."""
+    import shapely
+    from shapely.geometry import MultiPolygon
+
+    parts = [p for p in shapely.get_parts(shapely.make_valid(geom))
+             for p in (shapely.get_parts(p) if p.geom_type == "MultiPolygon" else [p])]
+    polys = [p for p in parts if p.geom_type == "Polygon" and not p.is_empty and p.area > 0]
+    if not polys:
+        return None
+    return polys[0] if len(polys) == 1 else MultiPolygon(polys)
+
+
 @router.post("/keyline/generate")
 def generate_keyline(
     req: KeylineRequest,
@@ -132,6 +146,10 @@ def generate_keyline(
 
     dem_arr, transform, crs = _read_raster_nan(dem)
     accum_arr, _, _ = _read_raster_nan(accum)
+    # Cell sizes, spacing and grades are in metres: a DEM in degrees (or with
+    # no CRS) would pass the cell-size check below and trace nonsense.
+    if crs is None or not crs.is_projected:
+        return {"status": "no_data", "detail": "DEM is not in a projected (metric) CRS"}
 
     cell_m = max(abs(transform.a), abs(transform.e))
     if cell_m > MAX_KEYLINE_CELL_M:
@@ -145,7 +163,9 @@ def generate_keyline(
     parcel_wgs = _parcel_polygon(req.parcel_id, auth.tenant_id)
     if parcel_wgs is None:
         return {"status": "no_data", "detail": "Parcel has no polygon"}
-    parcel_utm = shape(transform_geom("EPSG:4326", crs, mapping(parcel_wgs)))
+    parcel_utm = _polygonal(shape(transform_geom("EPSG:4326", crs, mapping(parcel_wgs))))
+    if parcel_utm is None:
+        return {"status": "no_data", "detail": "Parcel polygon is not a valid area"}
     # Analysis runs on a field-scale grid with nodata gaps filled
     # (see keyline.ANALYSIS_CELL_M / NODATA_FILL_MAX_M).
     dem_arr, accum_arr, transform = analysis_grid(dem_arr, transform, accum_arr)
@@ -165,10 +185,10 @@ def generate_keyline(
     layout = result["lines"]
     if result["coverage_truncated"]:
         logger.warning(
-            "keyline layout for parcel %s (tenant %s) stopped at the seed limit: "
+            "keyline layout for parcel %s (tenant %s) stopped early (%s): "
             "%d seeds gave no guide, %d lines, spacing %.1f m, grade %.4f",
-            req.parcel_id, auth.tenant_id, result["failed_seeds"], len(layout),
-            req.spacing, req.grade,
+            req.parcel_id, auth.tenant_id, result["stopped_by"], result["failed_seeds"],
+            len(layout), req.spacing, req.grade,
         )
 
     def _line_wgs(g) -> dict:

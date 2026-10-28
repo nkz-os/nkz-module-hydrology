@@ -627,8 +627,57 @@ def test_keyline_reports_and_logs_truncated_coverage(monkeypatch, caplog):
     import logging
     from app.services import keyline
 
-    monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
-    with caplog.at_level(logging.WARNING, logger="app.api.designs"):
-        res = _call_keyline(_valley_rasters(1.0), _parcel_wgs(size=160))
-    assert res["status"] == "ok" and res["coverage_truncated"] is True
-    assert any("seed limit" in r.getMessage() and "p-1" in r.getMessage() for r in caplog.records)
+    for limit, value, reason in (("MAX_FAILED_SEEDS", 0, "seed_limit"),
+                                 ("LAYOUT_TIME_BUDGET_S", 0.0, "time_budget")):
+        with monkeypatch.context() as m:
+            m.setattr(keyline, limit, value)
+            caplog.clear()
+            with caplog.at_level(logging.WARNING, logger="app.api.designs"):
+                res = _call_keyline(_valley_rasters(1.0), _parcel_wgs(size=160))
+        assert res["status"] == "ok" and res["coverage_truncated"] is True
+        assert "stopped_by" not in res                  # response contract unchanged
+        assert any(reason in r.getMessage() and "p-1" in r.getMessage() for r in caplog.records)
+
+
+def test_keyline_self_crossing_parcel_with_nodata_is_made_valid():
+    """A parcel ring that crosses itself (a bow-tie at its south end) over a
+    DEM with nodata gaps is made valid instead of failing."""
+    import shapely
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+    corners = ((5, 5), (155, 5), (155, 130), (5, 155), (155, 155), (5, 130), (5, 5))
+    ring = [t.transform(600000 + x, 4700000 - y) for x, y in corners]
+    parcel = {"type": "Polygon", "coordinates": [[list(c) for c in ring]]}
+    rasters = _valley_rasters(1.0, nodata_boxes=[(84, 100, 90, 106), (0, 0, 40, 160)])
+    res = _call_keyline(rasters, parcel, min_line_m=30.0)
+    assert res["status"] == "ok"
+    valid = shapely.make_valid(_utm(parcel)).buffer(1e-3)
+    for g in res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]:
+        assert valid.covers(_utm(g))
+    assert 0 < res["coverage_pct"] <= 100
+
+
+def test_keyline_parcel_without_area_is_no_data():
+    from pyproj import Transformer
+    t = Transformer.from_crs("EPSG:25830", "EPSG:4326", always_xy=True)
+    ring = [t.transform(x, y) for x, y in ((600010, 4699900), (600100, 4699900), (600010, 4699900))]
+    parcel = {"type": "Polygon", "coordinates": [[list(c) for c in ring + ring[:1]]]}
+    res = _call_keyline(_keyline_rasters(), parcel)
+    assert res["status"] == "no_data"
+
+
+def test_keyline_dem_in_geographic_crs_is_refused():
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    out = {}
+    for name in ("breached.tif", "accum.tif"):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=40, width=40, count=1, dtype="float32",
+                           crs="EPSG:4326", transform=from_origin(-1.6, 42.8, 1e-5, 1e-5)) as dst:
+            dst.write(np.arange(1600, dtype="float32").reshape(40, 40), 1)
+        out[name] = buf.getvalue()
+    res = _call_keyline(out, _parcel_wgs())
+    assert res["status"] == "no_data" and "projected" in res["detail"]
+    assert "keyline" not in res

@@ -36,15 +36,14 @@ DEFAULT_GRADE = 0.005
 # it runs down the valley instead of across the slope; 0.5 (30 degrees) still
 # recovers 0.5 m of error per metre of slope gradient per step.
 MAX_STEER = 0.5
-# Ruling (round 4): no line may hold an interior local high more than 5 cm
-# above its neighbouring lows (prominence on the analysis DEM sampled every
-# 0.1 m): water would stop in the dip before it. The trace never rises more
-# than COUNTER_SLOPE_TOL_M above the lowest point it has reached, checked
-# every NO_CLIMB_SAMPLE_M along each step, and placed lines are split where
-# they still do (see `_falling_parts`). 3 cm keeps 2 cm below the ruling;
-# 2 m DEMs carry 1-3 cm of micro-relief per metre, which ends more lines
-# early at a tighter bound (2 cm: coverage 16 % instead of 19 % on a hilly
-# real parcel).
+# No line may hold an interior local high more than 5 cm above its
+# neighbouring lows (prominence on the analysis DEM sampled every 0.1 m):
+# water would stop in the dip before it. The trace never rises more than
+# COUNTER_SLOPE_TOL_M above the lowest point it has reached, checked every
+# NO_CLIMB_SAMPLE_M along each step, and placed lines are split where they
+# still do (see `_falling_parts`). 3 cm keeps 2 cm below that limit; 2 m DEMs
+# carry 1-3 cm of micro-relief per metre, so a tighter bound ends noticeably
+# more lines early on hilly 2 m LiDAR test terrain.
 COUNTER_SLOPE_TOL_M = 0.03
 NO_CLIMB_SAMPLE_M = 0.1
 # A keyline starts at its keypoint on the valley floor: its first steps cross
@@ -58,12 +57,11 @@ KEYLINE_START_FREE_M = 3.0
 # 0.2 degrees (4 mm sideways over a 1 m step).
 NO_CLIMB_BISECTIONS = 8
 
-# Owner rules (spec, "Owner decision after real-terrain review" and "... second
-# real-terrain review"): every line is traced on the terrain at the design
-# grade and emitted only where its real fall, measured on the analysis DEM as
-# the elevation change over any GRADE_WINDOW_M run of the line, stays within
-# MAX_LINE_GRADE, always away from drainage. Exact offsets of a keyline drift
-# off grade and over humps on real terrain, so there are none.
+# Every line is traced on the terrain at the design grade and emitted only
+# where its real fall, measured on the analysis DEM as the elevation change
+# over any GRADE_WINDOW_M run of the line, stays within MAX_LINE_GRADE, always
+# away from drainage. Exact offsets of a keyline drift off grade and over
+# humps on real terrain, so there are none.
 MAX_LINE_GRADE = 0.015
 GRADE_WINDOW_M = 20.0
 # Lines are sampled for that measure every analysis cell / this factor. The
@@ -79,6 +77,12 @@ GRADE_MARGIN = 0.0005
 # retried. After this many such seeds the layout stops, which bounds the run
 # time (each costs a trace, a few ms).
 MAX_FAILED_SEEDS = 3000
+# Wall-clock budget (s) of the layout's seed loop. The layout runs inside the
+# request and the API gateway gives up on a proxied request after 30 s; the
+# DEM download, analysis grid, keypoints and response building need a few
+# seconds more. Past the budget the layout stops with what it has placed and
+# reports `coverage_truncated` (large parcels on rough ground hit it).
+LAYOUT_TIME_BUDGET_S = 20.0
 # Default shortest line kept (m): shorter runs are not worth a ripping pass
 # with a tractor. The user can change it (request field `min_line_m`).
 DEFAULT_MIN_LINE_M = 100.0
@@ -99,9 +103,8 @@ DRAINAGE_MIN_AREA_M2 = 2000.0
 # An arm ends where it has come back towards a drainage line by more than
 # this (m) from the farthest it has been: past a ridge it would fall towards
 # the next drainage line. Smaller than a rip-line spacing, so the cut only
-# ignores wobble below the scale of the pattern (one cell, 2 m, cut real-terrain
-# guides into many more short pieces: coverage 72 % instead of 75 % on a hilly
-# 38 ha parcel).
+# ignores wobble below the scale of the pattern (one cell, 2 m, cut lines on
+# hilly 2 m LiDAR test terrain into many more short pieces).
 DRAINAGE_APPROACH_M = 10.0
 
 # Trace steps per analysis cell. At one step per cell the line held the design
@@ -406,30 +409,6 @@ def detect_keyline(
     }
 
 
-def _bilinear(dem: np.ndarray, r: float, c: float) -> float:
-    ny, nx = dem.shape
-    r = min(max(r, 0.0), ny - 1.0)
-    c = min(max(c, 0.0), nx - 1.0)
-    r0, c0 = min(int(r), ny - 2), min(int(c), nx - 2)
-    fr, fc = r - r0, c - c0
-    top = dem[r0, c0] * (1 - fc) + dem[r0, c0 + 1] * fc
-    bot = dem[r0 + 1, c0] * (1 - fc) + dem[r0 + 1, c0 + 1] * fc
-    return float(top * (1 - fr) + bot * fr)
-
-
-def _z_at(dem, inv, x, y):
-    c, r = inv @ (x, y)
-    return _bilinear(dem, r - 0.5, c - 0.5)
-
-
-def _gradient(dem, inv, a, e, x, y, h):
-    """(dz/dx, dz/dy) in world units by central differences of the bilinear surface."""
-    def z(px, py):
-        c, r = inv @ (px, py)
-        return _bilinear(dem, r - 0.5, c - 0.5)
-    return ((z(x + h, y) - z(x - h, y)) / (2 * h), (z(x, y + h) - z(x, y - h)) / (2 * h))
-
-
 def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None, free_m=0.0):
     """Points from (x0, y0) following the contour with the design grade.
 
@@ -445,7 +424,7 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None,
     inv = ~transform
     ny, nx = mask.shape
     # Inline the inverse affine and the bilinear surface (same arithmetic as
-    # `_z_at`): the walk is the hot loop of the layout.
+    # `_z_many`): the walk is the hot loop of the layout.
     ia, ib, ic, id_, ie, if_ = inv.a, inv.b, inv.c, inv.d, inv.e, inv.f
     z = flat if flat is not None else np.asarray(dem, dtype=float).ravel().tolist()
 
@@ -597,35 +576,59 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None,
     return pts
 
 
-def trace_keyline(dem, transform, keypoint: dict, grade: float, parcel_mask) -> LineString:
-    """Keyline through `keypoint`, in the DEM CRS.
+def _arm(dem, transform, mask, x0, y0, grade, side, step, drainage=None, flat=None, free_m=0.0):
+    """Points of one arm traced from (x0, y0) (start included) at `grade`,
+    and how much farther from drainage its end is than its start (inf
+    without `drainage`).
+
+    `drainage` = (per-cell distance grid, function of points -> distances to
+    the drainage lines): the arm stops where it closes in on a drainage line
+    by more than `DRAINAGE_APPROACH_M` from the farthest it has been, and
+    ends at that farthest point (beyond it, it would fall towards another
+    drainage line). `flat` and `free_m` are passed to `_walk`.
+    """
+    away = None if drainage is None else (drainage[0], DRAINAGE_APPROACH_M + 2 * abs(transform.a))
+    pts = [(x0, y0)] + _walk(dem, transform, mask, x0, y0, grade, side, step,
+                             away=away, flat=flat, free_m=free_m)
+    if drainage is None:
+        return pts, math.inf
+    dist = drainage[1](pts)
+    closing = np.flatnonzero(dist < np.maximum.accumulate(dist) - DRAINAGE_APPROACH_M)
+    stop = int(closing[0]) if len(closing) else len(pts)
+    far = int(np.argmax(dist[:stop]))
+    return pts[:far + 1], float(dist[far] - dist[0])
+
+
+def trace_keyline(dem, transform, keypoint: dict, grade: float, parcel_mask,
+                  drainage=None, flat=None) -> LineString:
+    """Keyline through `keypoint`, in the DEM CRS (the guide `keyline_layout`
+    starts from).
 
     Goes both ways across the slope; elevation falls `grade` per metre of line
-    away from the valley. Stops at the mask edge, where the slope is flatter
-    than `grade` or has no elevation, or where the contour turns back on
-    itself within `TIGHT_TURN_RUN_M` (over a sharp crest or drainage line,
-    around a knoll or hollow); then it ends where that turn began. The line is
-    oriented so that its left side is the uphill side (`keyline_layout`
-    relies on this for "up"/"down").
+    away from the valley and never climbs back (past `KEYLINE_START_FREE_M`
+    from the keypoint). Each arm stops at the mask edge, where the slope is
+    flatter than `grade` or has no elevation, where it cannot go on without
+    climbing, or where the contour turns back on itself within
+    `TIGHT_TURN_RUN_M` (over a sharp crest or drainage line, around a knoll
+    or hollow; it then ends where that turn began); with `drainage` (see
+    `_arm`) also where it is farthest from drainage. The line is oriented so
+    that its left side is the uphill side. Empty when no arm moves.
     """
     mask = np.asarray(parcel_mask, dtype=bool)
     step = abs(transform.a) / TRACE_STEPS_PER_CELL
     x0, y0 = keypoint["x"], keypoint["y"]
-    first = _walk(dem, transform, mask, x0, y0, grade, +1, step, free_m=KEYLINE_START_FREE_M)
-    second = _walk(dem, transform, mask, x0, y0, grade, -1, step, free_m=KEYLINE_START_FREE_M)
-    coords = list(reversed(first)) + [(x0, y0)] + second
-    if len(coords) < 2:
-        return LineString()
-    # Orient: uphill must be on the left of travel. `_walk` keeps uphill on
-    # the left for side=+1 and on the right for side=-1, so `coords` (first
-    # arm reversed, then the second) has uphill on its right everywhere:
-    # reversing it is exact and needs no gradient at the keypoint (which may
-    # be undefined next to nodata).
-    return LineString(coords[::-1])
+    plus, _ = _arm(dem, transform, mask, x0, y0, grade, +1, step, drainage, flat, KEYLINE_START_FREE_M)
+    minus, _ = _arm(dem, transform, mask, x0, y0, grade, -1, step, drainage, flat, KEYLINE_START_FREE_M)
+    # `_walk` keeps uphill on the left of travel for side=+1 and on the right
+    # for side=-1, so the reversed minus arm followed by the plus arm has
+    # uphill on its left everywhere (no gradient needed at the keypoint,
+    # which may be undefined next to nodata).
+    coords = minus[::-1] + plus[1:]
+    return LineString(coords) if len(coords) >= 2 else LineString()
 
 
 def _z_many(dem: np.ndarray, inv: Affine, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-    """Bilinear elevations at world points (vectorised `_z_at`); NaN where a
+    """Bilinear elevations at world points (cell values at cell centres); NaN where a
     neighbouring cell has no elevation."""
     ny, nx = dem.shape
     c, r = inv @ (np.asarray(xs, dtype=float), np.asarray(ys, dtype=float))
@@ -843,15 +846,21 @@ def keyline_layout(
 
     Returns {"lines": [entries], "coverage_pct": parcel % within half a
     spacing of a line, "coverage_truncated": bool (the seed limit
-    `MAX_FAILED_SEEDS` stopped the layout with ground left), "failed_seeds":
+    `MAX_FAILED_SEEDS` or the time budget `LAYOUT_TIME_BUDGET_S` stopped the
+    layout with ground left), "stopped_by": None | "seed_limit" |
+    "time_budget", "failed_seeds":
     int}; entries are {geometry, direction ("keyline"|"line"), grade,
     max_grade_20m, valley}.
     """
     import heapq
+    import time
+
+    started = time.monotonic()
     from rasterio import features
     from shapely.ops import unary_union
 
-    empty = {"lines": [], "coverage_pct": 0.0, "coverage_truncated": False, "failed_seeds": 0}
+    empty = {"lines": [], "coverage_pct": 0.0, "coverage_truncated": False, "stopped_by": None,
+             "failed_seeds": 0}
     region = _usable_area(parcel_utm, dem, transform)
     if region.is_empty or parcel_utm.area <= 0:
         return empty
@@ -914,22 +923,10 @@ def keyline_layout(
         for radius, target in radii_targets:
             target[r0:r1, c0:c1] |= dist <= radius
 
-    def arm(x0, y0, side, mask, free_m=0.0):
-        """Points of one arm from (x0, y0), cut where it is farthest from
-        drainage (beyond that it would fall towards another drainage line),
-        and how much farther from drainage its end is than its start."""
-        pts = [(x0, y0)] + _walk(dem, transform, mask, x0, y0, grade, side, step,
-                                 away=None if drain_tree is None else (cell_dist, DRAINAGE_APPROACH_M + 2 * cell),
-                                 flat=flat, free_m=free_m)
-        dist = drain_dist(pts)
-        if dist is None:
-            return pts, math.inf
-        # Stop where the arm closes in on a drainage line (by more than
-        # DRAINAGE_APPROACH_M from the farthest it has been), then end there.
-        closing = np.flatnonzero(dist < np.maximum.accumulate(dist) - DRAINAGE_APPROACH_M)
-        stop = int(closing[0]) if len(closing) else len(pts)
-        far = int(np.argmax(dist[:stop]))
-        return pts[:far + 1], float(dist[far] - dist[0])
+    drainage = None if drain_tree is None else (cell_dist, drain_dist)
+
+    def arm(x0, y0, side, mask):
+        return _arm(dem, transform, mask, x0, y0, grade, side, step, drainage, flat)
 
     def oriented(pts, side):
         # `_walk` keeps uphill on the left of travel for side=+1 and on the
@@ -1024,15 +1021,9 @@ def keyline_layout(
                 counter += 1
                 heapq.heappush(heap, (float(cell_dist[rc_]), counter, x, y, gen))
 
-    def keyline_from(kp):
-        plus, _ = arm(kp["x"], kp["y"], +1, trace_mask, KEYLINE_START_FREE_M)
-        minus, _ = arm(kp["x"], kp["y"], -1, trace_mask, KEYLINE_START_FREE_M)
-        coords = oriented(minus, -1)[:-1] + oriented(plus, +1)
-        return LineString(coords) if len(coords) >= 2 else None
-
     for v, kp in enumerate(keypoints):
-        kl = keyline_from(kp)
-        if kl is not None:
+        kl = trace_keyline(dem, transform, kp, grade, trace_mask, drainage, flat)
+        if not kl.is_empty:
             for g in place(kl, v):
                 add_seeds(g, 1)
 
@@ -1040,7 +1031,7 @@ def keyline_layout(
     order = np.argsort(cell_dist[rows, cols], kind="stable")
     order_rc = list(zip(rows[order].tolist(), cols[order].tolist()))
     start_at = 0
-    failures, truncated = 0, False
+    failures, stopped_by = 0, None
     while True:
         seed = None
         while heap and seed is None:
@@ -1060,7 +1051,10 @@ def keyline_layout(
         if seed is None:
             break
         if failures >= MAX_FAILED_SEEDS:
-            truncated = True
+            stopped_by = "seed_limit"
+            break
+        if time.monotonic() - started > LAYOUT_TIME_BUDGET_S:
+            stopped_by = "time_budget"
             break
         x, y, gen = seed
         made, traced = [], []
@@ -1082,5 +1076,5 @@ def keyline_layout(
 
     covered = unary_union([o["geometry"].buffer(spacing_m / 2.0) for o in out]) if out else None
     coverage = 100.0 * covered.intersection(parcel_utm).area / parcel_utm.area if out else 0.0
-    return {"lines": out, "coverage_pct": coverage, "coverage_truncated": truncated,
-            "failed_seeds": failures}
+    return {"lines": out, "coverage_pct": coverage, "coverage_truncated": stopped_by is not None,
+            "stopped_by": stopped_by, "failed_seeds": failures}

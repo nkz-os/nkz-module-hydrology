@@ -162,7 +162,7 @@ def test_walk_stays_on_valley_floor():
     assert all(c == 40 for _, c in path)
 
 
-# ---- Task 2: trace, parallels, clipping -----------------------------------
+# ---- Trace and clipping ----
 
 import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
@@ -196,10 +196,9 @@ def test_keyline_crosses_slope_both_sides_and_stays_in_mask(hillside):
         c, r = inv @ (x, y)
         assert mask[int(r), int(c)]
     # mean grade along the path length of each arm is within 10 % of the design grade
-    from app.services.keyline import _bilinear
+    from app.services.keyline import _z_many
     def zat(p):
-        c, r = inv @ p
-        return _bilinear(dem, r - 0.5, c - 0.5)
+        return float(_z_many(dem, inv, [p[0]], [p[1]])[0])
     kpt = Point(kp["x"], kp["y"])
     s_kp = line.project(kpt)
     assert 0 < s_kp < line.length
@@ -208,7 +207,7 @@ def test_keyline_crosses_slope_both_sides_and_stays_in_mask(hillside):
         assert arm > 10
         mean_grade = (zat((kp["x"], kp["y"])) - zat(end)) / arm
         assert mean_grade == pytest.approx(0.005, rel=0.10)
-    # left of travel is uphill (contract used by keyline_pattern)
+    # left of travel is uphill
     left = shapely.get_parts(line.offset_curve(3.0))
     right = shapely.get_parts(line.offset_curve(-3.0))
     def mean_z(g):
@@ -269,7 +268,7 @@ def _lines(result):
     return [r["geometry"] for r in result]
 
 
-# ---- Real-terrain rework: nodata, flat valley floors, analysis grid, coverage ----
+# ---- Nodata, flat valley floors, analysis grid, coverage ----
 
 
 def test_analysis_grid_fills_small_gaps_and_keeps_wide_ones():
@@ -420,7 +419,7 @@ def test_analysis_grid_with_cell_not_dividing_2m():
     assert a.max() == pytest.approx(100 / 9)
 
 
-# ---- Owner rules: lines traced at grade, within 1.5 %, away from drainage ----
+# ---- Lines traced at grade, within 1.5 %, away from drainage ----
 
 TF2 = from_origin(600000, 4700000, 2.0, 2.0)
 N2 = 100
@@ -512,7 +511,7 @@ def _prominence(z):
 def _counter_slope(g, dem):
     """(largest interior-high prominence, largest climb above the lowest point
     reached walking from the high end) of line `g` sampled every 0.1 m, and
-    the profile. The ruling: no line holds an interior high over 5 cm."""
+    the profile. No line may hold an interior high over 5 cm."""
     from app.services.keyline import _profile
     _, z = _profile(g, dem, ~TF2, 0.1)
     walked = z if z[0] >= z[-1] else z[::-1]
@@ -625,6 +624,15 @@ def test_layout_reports_when_the_seed_limit_stops_it(monkeypatch):
     monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
     stopped = _run(_plane())
     assert stopped["coverage_truncated"] is True and stopped["failed_seeds"] == 0
+    assert {r["direction"] for r in stopped["lines"]} == {"keyline"}
+
+
+def test_layout_stops_at_the_time_budget(monkeypatch):
+    from app.services import keyline
+    assert _run(_plane())["stopped_by"] is None
+    monkeypatch.setattr(keyline, "LAYOUT_TIME_BUDGET_S", 0.0)
+    stopped = _run(_plane())
+    assert stopped["coverage_truncated"] is True and stopped["stopped_by"] == "time_budget"
     assert {r["direction"] for r in stopped["lines"]} == {"keyline"}
 
 
