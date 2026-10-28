@@ -11,11 +11,12 @@ Flat DEMs are detected and gracefully degraded (dataFidelity: degraded_flat).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import io
 import json
 import logging
 import math
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import numpy as np
@@ -306,28 +307,47 @@ def run_dem_pipeline(parcel_id: str, job_id: str, tenant_id: str = "") -> dict:
 def _fetch_weather(
     parcel_id: str, tenant_id: str, job_id: str,
 ) -> ParcelWeather | None:
-    """Fetch zonal weather stats from weather-map (soft-fail).
+    """Parcel weather for the record (soft-fail, never blocks the DEM pipeline).
 
-    Weather is non-blocking: if weather-map is unreachable the DEM pipeline
-    still completes.  The record simply won't carry meteo KPIs.
+    Temperatures and soil moisture come from weather-map's zonal stats; rain and
+    ET0 of the last closed day from weather-api's daily series. Either source may
+    be missing: the record then simply lacks those KPIs.
     """
+    tenant = tenant_id or "platform"
+    client = WeatherClient()
+    pw: ParcelWeather | None = None
     try:
-        client = WeatherClient()
-        pw = client.fetch_stats(parcel_id, tenant_id or "platform")
-        logger.info(
-            "[%s] weather: eto=%.2f precip=%.2f sm=%s",
-            job_id,
-            pw.eto_mm if pw.eto_mm is not None else -1,
-            pw.precipitation_mm if pw.precipitation_mm is not None else -1,
-            pw.soil_moisture,
-        )
-        return pw
+        pw = client.fetch_stats(parcel_id, tenant)
     except WeatherUnavailable as exc:
-        logger.warning("[%s] weather-map unavailable, proceeding without meteo: %s", job_id, exc)
-        return None
+        logger.warning("[%s] weather-map unavailable, proceeding without its stats: %s", job_id, exc)
     except Exception:
-        logger.exception("[%s] unexpected error fetching weather", job_id)
+        logger.exception("[%s] unexpected error fetching weather-map stats", job_id)
+
+    day = (datetime.now(timezone.utc) - timedelta(days=1)).date()
+    try:
+        precip, eto = client.fetch_daily_water(parcel_id, tenant, day)
+    except WeatherUnavailable as exc:
+        logger.warning("[%s] daily rain unavailable, no precipitation for the record: %s", job_id, exc)
+        precip = eto = None
+    except Exception:
+        logger.exception("[%s] unexpected error fetching daily rain", job_id)
+        precip = eto = None
+
+    if pw is None and precip is None and eto is None:
         return None
+    if pw is None:
+        pw = ParcelWeather(date=day.isoformat(), temperature_avg=None, temperature_min=None,
+                           eto_mm=None, precipitation_mm=None, soil_moisture=None,
+                           fidelity="parcel_weather")
+    pw = dataclasses.replace(
+        pw, date=day.isoformat(), precipitation_mm=precip,
+        eto_mm=eto if eto is not None else pw.eto_mm,
+    )
+    logger.info(
+        "[%s] weather %s: eto=%s precip=%s sm=%s",
+        job_id, pw.date, pw.eto_mm, pw.precipitation_mm, pw.soil_moisture,
+    )
+    return pw
 
 
 def _merge_weather_metrics(metrics: dict, weather: ParcelWeather) -> None:
@@ -402,8 +422,12 @@ def _reproject_to_utm(grid: DEMGrid) -> bytes:
 
 
 def _read_raster(tif_bytes: bytes) -> np.ndarray:
+    """Band 1 as float, nodata cells as NaN so means and maxima skip them."""
     with rasterio.open(io.BytesIO(tif_bytes)) as ds:
-        return ds.read(1)
+        arr = ds.read(1).astype("float64")
+        if ds.nodata is not None:
+            arr[arr == ds.nodata] = np.nan
+        return arr
 
 
 def _is_flat(arr: np.ndarray) -> bool:
@@ -469,18 +493,24 @@ def _compute_metrics(result: dict) -> dict:
 
 
 def _stream_length_m(geojson_bytes: bytes) -> float:
+    """Total stream length in metres; the network is stored in lon/lat (WGS84)."""
+    from pyproj import Geod
+
     try:
         gj = json.loads(geojson_bytes)
     except Exception:
         return 0.0
+    geod = Geod(ellps="WGS84")
     total = 0.0
     for feat in gj.get("features", []):
         geom = feat.get("geometry", {})
         if geom.get("type") != "LineString":
             continue
         coords = geom.get("coordinates", [])
-        for (x1, y1), (x2, y2) in zip(coords, coords[1:]):
-            total += math.hypot(x2 - x1, y2 - y1)  # UTM metres
+        if len(coords) < 2:
+            continue
+        lons, lats = zip(*[(c[0], c[1]) for c in coords])
+        total += geod.line_length(lons, lats)
     return total
 
 
