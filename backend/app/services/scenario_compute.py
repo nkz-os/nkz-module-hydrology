@@ -70,6 +70,35 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
     if not record:
         return {"status": "no_data"}
 
+    mode = nkz_attr(record, "calculationMode")
+    if mode not in ("storm", "retention"):
+        mode = None  # published before calculation modes: legacy event path
+
+    if nkz_attr(record, "designRainStatus") == "not_available":
+        return {
+            "status": "not_available",
+            "mode": mode,
+            "returnPeriodYears": None,
+            "reason": nkz_attr(record, "designRainReason") or "design_rain_not_available",
+        }
+
+    if mode == "retention":
+        return {
+            "status": "ok",
+            "mode": "retention",
+            "returnPeriodYears": None,
+            "retention": {
+                "median": {
+                    "storedM3": num_attr(nkz_attr(record, "retentionStoredM3")),
+                    "summerDays": num_attr(nkz_attr(record, "retentionSummerDays")),
+                },
+                "dry": {
+                    "storedM3": num_attr(nkz_attr(record, "retentionDryStoredM3")),
+                    "summerDays": num_attr(nkz_attr(record, "retentionDrySummerDays")),
+                },
+            },
+        }
+
     area_ha = num_attr(nkz_attr(record, "parcelAreaHa")) or 0.0
     area_m2 = area_ha * 10_000.0
     runoff_mm = num_attr(nkz_attr(record, "runoffMm")) or 0.0
@@ -96,6 +125,10 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
 
     return {
         "status": "ok",
+        "mode": mode,
+        "returnPeriodYears": (
+            num_attr(nkz_attr(record, "returnPeriodYears")) if mode == "storm" else None
+        ),
         "baseline": vars(baseline),
         "intervention": vars(intervention),
         "comparison": compare_scenarios({"baseline": baseline, "intervention": intervention}),

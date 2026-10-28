@@ -67,3 +67,49 @@ def test_compute_scenarios_caps_capture_at_total_runoff():
         r = scenario_compute.compute_scenarios("t1", "urn:ngsi-ld:AgriParcel:p1")
     assert r["status"] == "ok"
     assert abs(r["intervention"]["sediment_retained_t"] - 5.0) < 1e-6  # all sediment
+
+
+def _run(record, designs=()):
+    with patch.object(scenario_compute, "SyncOrionClient") as M:
+        M.return_value.query_entities.side_effect = [[record], list(designs)]
+        return scenario_compute.compute_scenarios("t1", "urn:ngsi-ld:AgriParcel:p1")
+
+
+def test_storm_scenario_uses_design_runoff():
+    rec = _record(**{"nkz:calculationMode": "storm", "nkz:designRainStatus": "ok",
+                     "nkz:returnPeriodYears": 25, "nkz:runoffMm": 20.0})
+    r = _run(rec, _designs([1000.0]))
+    assert r["status"] == "ok"
+    assert r["mode"] == "storm"
+    assert r["returnPeriodYears"] == 25
+    # 20 mm * 10 ha = 2000 m3 reference; 1000 captured.
+    assert r["intervention"]["water_captured_m3"] == 1000.0
+    assert abs(r["intervention"]["sediment_retained_t"] - 2.5) < 1e-6
+
+
+def test_retention_scenario_reports_m3_and_days():
+    rec = _record(**{"nkz:calculationMode": "retention", "nkz:designRainStatus": "ok",
+                     "nkz:retentionStoredM3": 800.0, "nkz:retentionSummerDays": 12,
+                     "nkz:retentionDryStoredM3": 500.0, "nkz:retentionDrySummerDays": 7})
+    r = _run(rec)
+    assert r["status"] == "ok"
+    assert r["mode"] == "retention"
+    assert r["returnPeriodYears"] is None
+    assert r["retention"]["median"] == {"storedM3": 800.0, "summerDays": 12.0}
+    assert r["retention"]["dry"] == {"storedM3": 500.0, "summerDays": 7.0}
+
+
+def test_design_rain_not_available_is_not_zeros():
+    rec = _record(**{"nkz:calculationMode": "storm", "nkz:designRainStatus": "not_available",
+                     "nkz:designRainReason": "short_history"})
+    r = _run(rec)
+    assert r["status"] == "not_available"
+    assert r["reason"] == "short_history"
+    assert r["mode"] == "storm"
+    assert "baseline" not in r
+
+
+def test_record_without_mode_uses_legacy_path():
+    r = _run(_record())
+    assert r["status"] == "ok"
+    assert r["mode"] is None
