@@ -4,6 +4,7 @@ import pytest
 
 from app.services.design_storm import (
     alternating_block_hyetograph,
+    SUBDAILY_SHAPE_SOURCE,
     depth_fraction,
     design_storm_response,
 )
@@ -71,3 +72,22 @@ def test_runoff_equals_cn_on_total_depth():
     hy = alternating_block_hyetograph(120.0)
     q, _ = design_storm_response(hy, 75, 25.0, 2.0)
     assert q == pytest.approx(runoff(120.0, 75)[0])
+
+
+def test_depth_fraction_pins_temez_formula():
+    assert depth_fraction(1.0) == pytest.approx(0.4027, abs=5e-4)
+    assert "5.2-IC" in SUBDAILY_SHAPE_SOURCE and "I1/Id=11" in SUBDAILY_SHAPE_SOURCE
+
+
+@pytest.mark.parametrize("bad", [4.9, 15.1, 20.0])
+def test_out_of_range_i1_id_raises(bad):
+    with pytest.raises(ValueError):
+        depth_fraction(1.0, bad)
+    with pytest.raises(ValueError):
+        alternating_block_hyetograph(50.0, 1.0, bad)
+
+
+def test_block_h_must_divide_24():
+    with pytest.raises(ValueError):
+        alternating_block_hyetograph(50.0, 5.0)
+    assert len(alternating_block_hyetograph(50.0, 0.5, 8.0)) == 48

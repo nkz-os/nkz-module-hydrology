@@ -10,16 +10,31 @@ from __future__ import annotations
 from app.services.scs_cn import runoff
 
 # Ratio of the 1-h to the mean-daily rainfall intensity (I1/Id).
-# ASSUMPTION: 11 is a representative value for the Spanish mainland; make it a
-# parameter of depth_fraction when a regional map is wired in.
+# Spanish standard default, applied EU-wide as a documented generic shape.
 DEFAULT_I1_ID = 11.0
+# The curve stops being monotone above ~17; accept only this range.
+I1_ID_MIN, I1_ID_MAX = 5.0, 15.0
+
+
+def subdaily_shape_source(i1_id: float = DEFAULT_I1_ID) -> str:
+    """Citation of the sub-daily shape, for the fidelity report (designRainSource)."""
+    return f"Temez 1978 / Norma 5.2-IC (Orden FOM/298/2016), I1/Id={i1_id:g}"
+
+
+SUBDAILY_SHAPE_SOURCE = subdaily_shape_source()
+
+
+def _check_i1_id(i1_id: float) -> None:
+    if not (I1_ID_MIN <= i1_id <= I1_ID_MAX):
+        raise ValueError(f"i1_id must be within [{I1_ID_MIN:g}, {I1_ID_MAX:g}], got {i1_id}")
 
 
 def depth_fraction(duration_h: float, i1_id: float = DEFAULT_I1_ID) -> float:
     """Fraction of the 24-h depth that falls in the most intense ``duration_h``.
 
     Intensity-duration relation of the Spanish road drainage standard
-    (Ministerio de Fomento, Norma 5.2-IC "Drenaje superficial", Temez 1978):
+    (Ministerio de Fomento, Norma 5.2-IC "Drenaje superficial", Orden
+    FOM/298/2016; Temez 1978):
 
         I_t / I_d = (I_1 / I_d) ** ((28**0.1 - t**0.1) / (28**0.1 - 1))
 
@@ -27,6 +42,7 @@ def depth_fraction(duration_h: float, i1_id: float = DEFAULT_I1_ID) -> float:
     value at 24 h so that f(24) = 1 exactly. Monotone increasing in t for
     I_1/I_d up to about 15.
     """
+    _check_i1_id(i1_id)
     if duration_h <= 0:
         return 0.0
     if duration_h >= 24.0:
@@ -39,10 +55,15 @@ def depth_fraction(duration_h: float, i1_id: float = DEFAULT_I1_ID) -> float:
     return depth(duration_h) / depth(24.0)
 
 
-def alternating_block_hyetograph(depth_24h_mm: float, block_h: float = 1.0) -> list[float]:
+def alternating_block_hyetograph(
+    depth_24h_mm: float, block_h: float = 1.0, i1_id: float = DEFAULT_I1_ID
+) -> list[float]:
     """24/block_h block depths (mm), summing to ``depth_24h_mm``, largest in the middle."""
+    _check_i1_id(i1_id)
+    if block_h <= 0 or abs(24.0 / block_h - round(24.0 / block_h)) > 1e-9:
+        raise ValueError(f"block_h must divide 24 h, got {block_h}")
     n = int(round(24.0 / block_h))
-    cum = [depth_fraction(block_h * (k + 1)) * depth_24h_mm for k in range(n)]
+    cum = [depth_fraction(block_h * (k + 1), i1_id) * depth_24h_mm for k in range(n)]
     cum[-1] = depth_24h_mm
     incs = [cum[0]] + [cum[k] - cum[k - 1] for k in range(1, n)]  # descending
     out: list[float] = [0.0] * n
