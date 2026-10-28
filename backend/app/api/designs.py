@@ -45,7 +45,8 @@ class KeylineRequest(BaseModel):
     parcel_id: str
     grade: float = Field(0.005, gt=0)
     spacing: float = Field(12.0, gt=0)
-    lines: int | None = Field(None, ge=0)  # None = cover the parcel
+    lines: int | None = Field(None, ge=0)  # rows of lines out from the keylines; None = as far as the terrain allows
+    min_line_m: float = Field(100.0, gt=0)  # shorter traced lines are dropped
 
 
 class PondScoreRequest(BaseModel):
@@ -118,7 +119,7 @@ def generate_keyline(
     req: KeylineRequest,
     auth: AuthContext = require_auth(),
 ) -> dict:
-    """Keypoints of the valleys in the parcel, keylines and parallels covering it."""
+    """Keypoints of the valleys in the parcel, their keylines and lines traced at grade."""
     from rasterio import features
     from rasterio.warp import transform_geom
     from shapely.geometry import mapping, shape
@@ -159,7 +160,7 @@ def generate_keyline(
 
     result = keyline_layout(
         dem_arr, transform, parcel_mask, parcel_utm, kps, req.spacing,
-        grade=req.grade, max_lines=req.lines, flow_accum=accum_arr,
+        grade=req.grade, max_lines=req.lines, min_line_m=req.min_line_m, flow_accum=accum_arr,
     )
     layout = result["lines"]
     if result["coverage_truncated"]:
@@ -187,8 +188,7 @@ def generate_keyline(
     keyline_entries = [p for pcs in per_valley for p in pcs]
     main = max(per_valley[0], key=lambda p: p["geometry"].length) if per_valley[0] else None
     parallels = [
-        {"geometry": _line_wgs(p["geometry"]), "direction": p["direction"],
-         "offset_m": p["offset_m"], **_metrics(p)}
+        {"geometry": _line_wgs(p["geometry"]), "direction": p["direction"], **_metrics(p)}
         for p in layout
         if p["direction"] != "keyline"
     ]
@@ -202,6 +202,7 @@ def generate_keyline(
         "parallel_lines": parallels,
         "max_line_grade": MAX_LINE_GRADE,
         "coverage_truncated": result["coverage_truncated"],
+        "coverage_pct": round(result["coverage_pct"], 1),
         "request": req.model_dump(),
         "status": "ok",
     }

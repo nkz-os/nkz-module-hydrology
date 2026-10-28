@@ -420,7 +420,7 @@ def test_analysis_grid_with_cell_not_dividing_2m():
     assert a.max() == pytest.approx(100 / 9)
 
 
-# ---- Owner rule: lines within 1.5 % over 20 m, new guides where parallels drift ----
+# ---- Owner rules: lines traced at grade, within 1.5 %, away from drainage ----
 
 TF2 = from_origin(600000, 4700000, 2.0, 2.0)
 N2 = 100
@@ -438,18 +438,38 @@ def _plane():
 
 
 def _fan():
-    """Slope rising from 3 % in the west to 11 % in the east: the contours fan
-    out, so true parallels of a contour line drift off grade."""
+    """Slope rising from 3 % in the west to 11 % in the east."""
     i, j = np.mgrid[0:N2, 0:N2].astype(float)
     return 100 - (0.03 + 0.0004 * 2.0 * j) * 2.0 * i
+
+
+def _spur_and_hollow():
+    """Two valleys running south at x = 50 m and x = 150 m with a spur between
+    them (crest at x = 100 m), and a hollow coming down the spur's west side
+    into the west valley; drainage lines carry 1000 cells."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x, y = (j + 0.5) * 2.0, (i + 0.5) * 2.0
+    dv = np.minimum(np.abs(x - 50), np.abs(x - 150))
+    dem = 100 - 0.04 * y + 0.12 * (np.sqrt(dv ** 2 + 25) - 5)
+    # hollow along y = 60 + (x - 50) * 0.4 for 50 < x < 95
+    along = (x > 50) & (x < 95)
+    off = np.abs(y - (60 + (x - 50) * 0.4))
+    dem -= np.where(along, 1.5 * np.exp(-(off / 6.0) ** 2) * (95 - x) / 45, 0.0)
+    acc = np.zeros((N2, N2))
+    acc[:, 25] = acc[:, 75] = 1000.0
+    for jj in range(26, 47):
+        xx = (jj + 0.5) * 2.0
+        acc[int((60 + (xx - 50) * 0.4) / 2.0), jj] = 1000.0
+    return dem, acc
 
 
 PARCEL2 = box(600003.3, 4699803.3, 600196.7, 4699996.7)
 
 
-def _layout(dem, parcel=PARCEL2, kp=(50, 50), **kw):
+def _run(dem, parcel=PARCEL2, kps=((50, 50),), **kw):
     from app.services.keyline import keyline_layout
-    return keyline_layout(dem, TF2, np.ones(dem.shape, bool), parcel, [_kp2(dem, *kp)], 12.0, **kw)["lines"]
+    return keyline_layout(dem, TF2, np.ones(dem.shape, bool), parcel,
+                          [_kp2(dem, *k) for k in kps], 12.0, **kw)
 
 
 def _no_crossings(lines):
@@ -462,88 +482,120 @@ def _coverage(lines, parcel, spacing=12.0):
     return unary_union([g.buffer(spacing / 2) for g in lines]).intersection(parcel).area / parcel.area
 
 
-def test_layout_parallels_follow_the_keyline_on_a_plane():
-    from app.services.keyline import MAX_LINE_GRADE
-    res = _layout(_plane())
-    assert [r["direction"] for r in res].count("keyline") == 1
-    own = [r for r in res if r["guide"] == 0]
-    for side in (lambda r: r["offset_m"] >= 0, lambda r: r["offset_m"] <= 0):
-        chain = sorted((r for r in own if side(r)), key=lambda r: abs(r["offset_m"]))
-        assert len(chain) >= 5
-        for a, b in zip(chain, chain[1:]):
-            assert a["geometry"].distance(b["geometry"]) == pytest.approx(12.0, rel=0.01)
-    assert all(r["offset_m"] > 0 for r in own if r["direction"] == "up")
-    assert all(r["offset_m"] < 0 for r in own if r["direction"] == "down")
-    for r in own:                               # measured, not the design value
-        assert 0.003 < r["grade"] < 0.006 and r["max_grade_20m"] <= MAX_LINE_GRADE
-    lines = _lines(res)
-    assert _no_crossings(lines)
-    assert _coverage(lines, PARCEL2) > 0.95
-    assert all(g.difference(PARCEL2.buffer(1e-6)).is_empty for g in lines)
+def _bunched(lines, spacing=12.0):
+    """Pairs of lines closer than half the spacing over more than 20 m."""
+    n = 0
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            if lines[i].intersection(lines[j].buffer(0.5 * spacing - 1e-6)).length > 20.0:
+                n += 1
+    return n
 
 
-def test_layout_max_lines_draws_no_new_guides():
-    from app.services.keyline import MIN_SEGMENT_M
-    res = _layout(_plane(), max_lines=2)
-    assert {r["direction"] for r in res} <= {"keyline", "up", "down"}
-    assert {r["offset_m"] for r in res} <= {-24.0, -12.0, 0.0, 12.0, 24.0}
-    assert all(r["geometry"].length >= MIN_SEGMENT_M for r in res)
+def _hump(g, dem):
+    from app.services.keyline import _profile
+    _, z = _profile(g, dem, ~TF2, 0.25)
+    return float(z.max() - max(z[0], z[-1])), z
+
+
+def test_layout_traces_spaced_lines_at_grade_on_a_plane():
+    from app.services.keyline import MAX_LINE_GRADE, line_grade
+    res = _run(_plane())
+    keylines = [r for r in res["lines"] if r["direction"] == "keyline"]
+    lines = [r for r in res["lines"] if r["direction"] == "line"]
+    assert len(keylines) == 1 and len(lines) >= 10
+    for r in lines:                             # traced at the design grade
+        mean, worst = line_grade(r["geometry"], _plane(), TF2)
+        assert (mean, worst) == pytest.approx((r["grade"], r["max_grade_20m"]))
+        assert 0.003 < r["grade"] < 0.007 and r["max_grade_20m"] <= MAX_LINE_GRADE
+    geoms = _lines(res["lines"])
+    assert _no_crossings(geoms) and _bunched(geoms) == 0
+    # neighbours about one spacing apart
+    gaps = [min(g.distance(h) for h in geoms if h is not g) for g in geoms]
+    assert 6.0 <= min(gaps) and np.median(gaps) == pytest.approx(12.0, abs=3.0)
+    assert all(g.difference(PARCEL2.buffer(1e-6)).is_empty for g in geoms)
+    assert res["coverage_pct"] == pytest.approx(100 * _coverage(geoms, PARCEL2))
+    assert res["coverage_pct"] > 75 and res["coverage_truncated"] is False
+
+
+def test_layout_drops_lines_shorter_than_min_line_m():
+    from app.services.keyline import DEFAULT_MIN_LINE_M
+    assert DEFAULT_MIN_LINE_M == 100.0
+    counts = {}
+    for m in (50.0, 150.0):
+        lines = [r["geometry"] for r in _run(_fan(), min_line_m=m)["lines"] if r["direction"] == "line"]
+        assert lines and all(g.length >= m for g in lines)
+        counts[m] = len(lines)
+    assert counts[50.0] > counts[150.0]
+    default = [r["geometry"] for r in _run(_fan())["lines"] if r["direction"] == "line"]
+    assert all(g.length >= 100.0 for g in default)
+
+
+def test_layout_max_lines_seeds_only_rows_next_to_the_keyline():
+    res = _run(_plane(), max_lines=1)
+    keyline = [r["geometry"] for r in res["lines"] if r["direction"] == "keyline"][0]
+    lines = [r["geometry"] for r in res["lines"] if r["direction"] == "line"]
+    assert lines and all(g.distance(keyline) <= 12.0 + 1.0 for g in lines)
+    assert len(lines) < len([r for r in _run(_plane())["lines"] if r["direction"] == "line"])
 
 
 def test_layout_respects_holes_and_multipolygon():
     hole = box(600070, 4699870, 600130, 4699930)
     holed = Polygon(PARCEL2.exterior.coords, [hole.exterior.coords])
-    res = _layout(_plane(), parcel=holed, kp=(20, 50))
-    assert res
-    for g in _lines(res):
+    res = _run(_plane(), parcel=holed, kps=((20, 50),), min_line_m=30.0)
+    assert res["lines"]
+    for g in _lines(res["lines"]):
         assert g.intersection(hole.buffer(-1e-6)).is_empty
     multi = MultiPolygon([box(600003.3, 4699803.3, 600080, 4699996.7),
                           box(600120, 4699803.3, 600196.7, 4699996.7)])
-    res2 = _layout(_plane(), parcel=multi, kp=(50, 20))
+    res2 = _run(_plane(), parcel=multi, kps=((50, 20),), min_line_m=30.0)
     gap = box(600080.001, 4699800, 600119.999, 4700000)
-    assert res2 and all(g.intersection(gap).is_empty for g in _lines(res2))
-    assert max(g.centroid.x for g in _lines(res2)) > 600120
-
-
-def test_layout_seeds_new_guides_where_parallels_exceed_the_cap():
-    from app.services.keyline import MAX_LINE_GRADE, line_grade
-    fan = _fan()
-    res = _layout(fan)
-    guides = [r for r in res if r["direction"] == "guide"]
-    assert guides
-    for r in res:
-        mean, worst = line_grade(r["geometry"], fan, TF2)
-        assert worst <= MAX_LINE_GRADE
-        assert (mean, worst) == pytest.approx((r["grade"], r["max_grade_20m"]))
-    lines = _lines(res)
-    assert _no_crossings(lines)
-    full = _coverage(lines, PARCEL2)
-    # parallels of the keyline alone (no new guides) stop where they drift
-    alone = _coverage(_lines(_layout(fan, max_lines=100)), PARCEL2)
-    assert full > 0.9 and full > alone + 0.2
+    assert res2["lines"] and all(g.intersection(gap).is_empty for g in _lines(res2["lines"]))
+    assert max(g.centroid.x for g in _lines(res2["lines"])) > 600120
 
 
 def test_layout_caps_line_grade_on_steepening_ground():
-    """True parallels of the keyline would fall more than the cap at some
-    offsets: those stretches are left out, nothing above the cap is drawn."""
     from app.services.keyline import MAX_LINE_GRADE, line_grade
     fan = _fan()
-    res = _layout(fan, max_lines=100)
-    assert all(line_grade(g, fan, TF2)[1] <= MAX_LINE_GRADE for g in _lines(res))
-    # the same parallels on a plane cover the parcel; on the fan the cap
-    # removed the stretches that drifted off grade
-    assert _coverage(_lines(_layout(_plane(), max_lines=100)), PARCEL2) > 0.95
-    assert _coverage(_lines(res), PARCEL2) < 0.8
+    res = _run(fan, min_line_m=30.0)
+    assert res["lines"]
+    assert all(line_grade(g, fan, TF2)[1] <= MAX_LINE_GRADE for g in _lines(res["lines"]))
 
 
 def test_layout_never_crosses_unfilled_nodata():
     dem = _plane()
     dem[40:60, 20:40] = np.nan
     footprint = box(600040, 4699880, 600080, 4699920)
-    res = _layout(dem)
-    lines = _lines(res)
+    res = _run(dem, min_line_m=30.0)
+    lines = _lines(res["lines"])
     assert lines and not any(g.intersects(footprint) for g in lines)
-    assert _coverage(lines, PARCEL2.difference(footprint)) > 0.85
+
+
+def test_layout_spur_and_hollow_no_humps_no_fall_towards_drainage():
+    from app.services.keyline import MAX_LINE_GRADE, keyline_layout
+    dem, acc = _spur_and_hollow()
+    res = keyline_layout(dem, TF2, np.ones(dem.shape, bool), PARCEL2, [], 12.0,
+                         min_line_m=50.0, flow_accum=acc)
+    lines = [r["geometry"] for r in res["lines"] if r["direction"] == "line"]
+    drain = shapely.MultiPoint([TF2 @ (c + 0.5, r + 0.5) for r, c in np.argwhere(acc > 0)])
+    assert len(lines) >= 5 and {g.centroid.x < TF2.c + 100 for g in lines} == {True, False}
+    for g in lines:
+        hump, z = _hump(g, dem)
+        assert hump <= 0.05                      # no interior hump
+        high, low = (g.coords[0], g.coords[-1]) if z[0] >= z[-1] else (g.coords[-1], g.coords[0])
+        assert shapely.Point(low).distance(drain) >= shapely.Point(high).distance(drain) - 2.0
+        assert g.length >= 50.0
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res["lines"])
+    assert _no_crossings(lines) and _bunched(lines) == 0
+
+
+def test_layout_reports_when_the_seed_limit_stops_it(monkeypatch):
+    from app.services import keyline
+    assert _run(_plane())["coverage_truncated"] is False
+    monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
+    stopped = _run(_plane())
+    assert stopped["coverage_truncated"] is True and stopped["failed_seeds"] == 0
+    assert {r["direction"] for r in stopped["lines"]} == {"keyline"}
 
 
 def test_end_to_end_valley_to_layout():
@@ -552,53 +604,39 @@ def test_end_to_end_valley_to_layout():
     mask = np.ones(dem.shape, bool)
     kps = detect_keypoints(dem, tf, acc, mask)
     parcel = box(tf.c + 5, tf.f - 155, tf.c + 155, tf.f - 5)
-    res = keyline_layout(dem, tf, mask, parcel, kps, 12.0, flow_accum=acc)["lines"]
-    assert any(r["direction"] == "keyline" for r in res)
-    lines = _lines(res)
-    assert _no_crossings(lines)
+    res = keyline_layout(dem, tf, mask, parcel, kps, 12.0, min_line_m=50.0, flow_accum=acc)
+    assert any(r["direction"] == "keyline" for r in res["lines"])
+    lines = _lines(res["lines"])
+    assert _no_crossings(lines) and _bunched(lines) == 0
     assert all(g.difference(parcel.buffer(1e-6)).is_empty for g in lines)
-    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res)
-    assert _coverage(lines, parcel) > 0.8
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res["lines"])
+    assert 0 < res["coverage_pct"] <= 100
 
 
-def _spur():
-    """Two valleys running south at x = 50 m and x = 150 m with a spur between
-    them (crest at x = 100 m); their drainage lines carry 1000 cells."""
+def test_falling_parts_splits_humps():
+    """A line straight over a ridge rises then falls: it is split at the crest
+    into two parts that each start high."""
+    from app.services.keyline import _falling_parts
     i, j = np.mgrid[0:N2, 0:N2].astype(float)
-    x, y = (j + 0.5) * 2.0, (i + 0.5) * 2.0
-    dv = np.minimum(np.abs(x - 50), np.abs(x - 150))
-    dem = 100 - 0.04 * y + 0.12 * (np.sqrt(dv ** 2 + 25) - 5)
-    acc = np.zeros((N2, N2))
-    acc[:, 25] = acc[:, 75] = 1000.0
-    return dem, acc
+    dem = 100 - 0.01 * np.abs((j + 0.5) * 2.0 - 100)
+    line = LineString([(TF2.c + 40, TF2.f - 101), (TF2.c + 160, TF2.f - 101)])
+    assert _hump(line, dem)[0] > 0.5
+    parts = _falling_parts(line, dem, TF2, lambda pts: None, 15.0)
+    assert len(parts) == 2
+    for g in parts:
+        assert _hump(g, dem)[0] <= 0.02
+        assert g.length == pytest.approx(60.0, abs=2.0)      # crest within a cell
 
 
-def test_layout_guides_fall_away_from_drainage_on_a_spur():
-    from app.services.keyline import _profile, keyline_layout
-    dem, acc = _spur()
-    res = keyline_layout(dem, TF2, np.ones(dem.shape, bool), PARCEL2, [], 12.0, flow_accum=acc)
-    guides = [r["geometry"] for r in res["lines"] if r["direction"] == "guide"]
-    to_valley = lambda p: min(abs(p[0] - (TF2.c + 50)), abs(p[0] - (TF2.c + 150)))
-    sides = set()
-    for g in guides:
-        d, z = _profile(g, dem, ~TF2, 0.25)
-        k = int(np.argmax(z))
-        assert min(d[k], g.length - d[k]) <= 1.0          # highest point is an end
-        high, low = (g.coords[0], g.coords[-1]) if d[k] <= 1.0 else (g.coords[-1], g.coords[0])
-        assert to_valley(low) > to_valley(high)          # falls away from the valley
-        sides.add(g.centroid.x < TF2.c + 100)
-    assert len(guides) >= 4 and sides == {True, False}
-    assert _coverage(_lines(res["lines"]), PARCEL2) > 0.8
-    assert res["coverage_truncated"] is False
-
-
-def test_layout_reports_when_the_seed_limit_stops_it(monkeypatch):
-    from app.services import keyline
-    from app.services.keyline import keyline_layout
-    fan = _fan()
-    run = lambda: keyline_layout(fan, TF2, np.ones(fan.shape, bool), PARCEL2, [_kp2(fan, 50, 50)], 12.0)
-    assert run()["coverage_truncated"] is False
-    monkeypatch.setattr(keyline, "MAX_FAILED_SEEDS", 0)
-    stopped = run()
-    assert stopped["coverage_truncated"] is True and stopped["failed_seeds"] == 0
-    assert not any(r["direction"] == "guide" for r in stopped["lines"])
+def test_falling_parts_keeps_only_lines_falling_away_from_drainage():
+    """Drainage along x = 0: a line must be high near it and low away from it."""
+    from app.services.keyline import _falling_parts
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x = (j + 0.5) * 2.0
+    to_drain = lambda pts: np.array([p[0] - TF2.c for p in pts])
+    away = 100 - 0.01 * x                       # high next to the drainage
+    towards = 100 + 0.01 * x                    # low next to the drainage
+    line = LineString([(TF2.c + 50, TF2.f - 101), (TF2.c + 150, TF2.f - 101)])
+    for g in (line, LineString(line.coords[::-1])):
+        assert _falling_parts(g, away, TF2, to_drain, 15.0) == [g]
+        assert _falling_parts(g, towards, TF2, to_drain, 15.0) == []

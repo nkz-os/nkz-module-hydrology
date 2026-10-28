@@ -420,7 +420,7 @@ def _call_keyline(rasters, parcel=None, **req):
 
 
 def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
-    res = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=2)
+    res = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=2, min_line_m=20.0)
     assert res["status"] == "ok"
     assert res["keypoint"]["type"] == "Point"
     assert res["keyline"]["type"] == "LineString"
@@ -430,10 +430,11 @@ def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
     assert len(res["keylines_metrics"]) == len(res["keylines"])
     assert set(res["keyline_metrics"]) == {"grade", "max_grade_20m"}
     for p in res["parallel_lines"]:
-        assert set(p) == {"geometry", "grade", "max_grade_20m", "direction", "offset_m"}
-        assert p["direction"] in ("up", "down", "guide")
+        assert set(p) == {"geometry", "grade", "max_grade_20m", "direction"}
+        assert p["direction"] == "line"
         assert p["geometry"]["type"] == "LineString"
         assert 0 <= p["grade"] <= p["max_grade_20m"] <= res["max_line_grade"] == 0.015
+    assert 0 < res["coverage_pct"] <= 100 and res["request"]["min_line_m"] == 20.0
     assert res["request"]["lines"] == 2
 
 
@@ -505,7 +506,8 @@ def test_keyline_orion_failure_is_502_not_no_data():
 def test_keyline_request_rejects_invalid_inputs():
     from pydantic import ValidationError
     from app.api.designs import KeylineRequest
-    for bad in ({"spacing": 0}, {"grade": -0.1}, {"lines": -1}):
+    assert KeylineRequest(parcel_id="p-1").min_line_m == 100.0
+    for bad in ({"spacing": 0}, {"grade": -0.1}, {"lines": -1}, {"min_line_m": 0}):
         with pytest.raises(ValidationError):
             KeylineRequest(parcel_id="p-1", **bad)
 
@@ -558,7 +560,7 @@ def test_keyline_with_nodata_gaps_inside_parcel():
         (0, 0, 40, 160),        # a strip wider than the fill distance
     ])
     parcel = _parcel_wgs(size=160)
-    res = _call_keyline(rasters, parcel)
+    res = _call_keyline(rasters, parcel, min_line_m=30.0)
     assert res["status"] == "ok"
     kp = _utm(res["keypoint"])
     assert 100 < res["keypoint"]["coordinates"][2] < 140      # a real elevation
@@ -574,7 +576,7 @@ def test_keyline_with_nodata_gaps_inside_parcel():
     lines = [_utm(g) for g in geoms]
     area = _utm(parcel)
     covered = unary_union([g.buffer(3.0) for g in lines]).intersection(area).area / area.area
-    assert covered > 0.8
+    assert res["coverage_pct"] == pytest.approx(100 * covered, abs=0.1)
     # nothing over the part of the strip the fill cannot reach (> 20 m from data)
     unfilled = box(600000, 4699840, 600015, 4700000)
     assert not any(g.intersects(unfilled) for g in lines)
@@ -611,12 +613,12 @@ def _sharp_v_rasters(size=80):
     return out
 
 
-def test_keyline_ok_without_keyline_but_with_guides():
-    res = _call_keyline(_sharp_v_rasters(), _parcel_wgs())
+def test_keyline_ok_without_keyline_but_with_lines():
+    res = _call_keyline(_sharp_v_rasters(), _parcel_wgs(), min_line_m=20.0)
     assert res["status"] == "ok"
     assert res["keyline"] is None and res["keylines"] == [] and res["keyline_metrics"] is None
     assert res["keypoint"]["type"] == "Point"
-    assert any(p["direction"] == "guide" for p in res["parallel_lines"])
+    assert any(p["direction"] == "line" for p in res["parallel_lines"])
     assert res["coverage_truncated"] is False
 
 

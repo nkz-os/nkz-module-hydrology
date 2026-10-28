@@ -37,12 +37,12 @@ DEFAULT_GRADE = 0.005
 # recovers 0.5 m of error per metre of slope gradient per step.
 MAX_STEER = 0.5
 
-# Owner rule (spec, "Owner decision after real-terrain review"): a pattern
-# line is emitted only where its real fall, measured on the analysis DEM as the
-# elevation change over any GRADE_WINDOW_M run of the line, stays within
-# MAX_LINE_GRADE. True parallels of a guide drift off grade as the terrain
-# bends away from the guide; where they would exceed the cap a new guide is
-# traced at the design grade and the pattern continues parallel to it.
+# Owner rules (spec, "Owner decision after real-terrain review" and "... second
+# real-terrain review"): every line is traced on the terrain at the design
+# grade and emitted only where its real fall, measured on the analysis DEM as
+# the elevation change over any GRADE_WINDOW_M run of the line, stays within
+# MAX_LINE_GRADE, always away from drainage. Exact offsets of a keyline drift
+# off grade and over humps on real terrain, so there are none.
 MAX_LINE_GRADE = 0.015
 GRADE_WINDOW_M = 20.0
 # Lines are sampled for that measure every analysis cell / this factor. The
@@ -54,14 +54,24 @@ GRADE_SAMPLES_PER_CELL = 8
 # maximum stays within the cap however finely it is measured again (finer
 # sampling read up to 3e-4 more on real terrain).
 GRADE_MARGIN = 0.0005
-# Seeds that give no usable guide (flats, slivers between patterns) are not
+# Seeds that give no usable line (flats, ridges, gaps between lines) are not
 # retried. After this many such seeds the layout stops, which bounds the run
-# time (each costs a trace, ~2 ms); a 38 ha hilly parcel settles by itself
-# after ~1 500.
+# time (each costs a trace, a few ms).
 MAX_FAILED_SEEDS = 3000
-# Drainage lines for the fall direction of guides: cells draining at least
+# Default shortest line kept (m): shorter runs are not worth a ripping pass
+# with a tractor. The user can change it (request field `min_line_m`).
+DEFAULT_MIN_LINE_M = 100.0
+# A new line is seeded one spacing across the slope from an existing line,
+# every spacing along it. Its trace stops where it comes within this fraction
+# of the spacing of another line, and what still comes closer is cut, so
+# neighbouring lines never bunch below half the spacing.
+CLEARANCE_FRACTION = 0.5
+# A seed closer than this fraction of the spacing to an existing line is
+# skipped: the ground there is already served by that line.
+SEED_CLEARANCE_FRACTION = 0.75
+# Drainage lines for the fall direction of lines: cells draining at least
 # this area (m2). A keyline pattern moves water from the drainage lines towards
-# the ridges, so every guide starts (high end) next to drainage and falls away
+# the ridges, so every line starts (high end) next to drainage and falls away
 # from it; 0.2 ha keeps the hollows that gather a field's runoff and leaves
 # out the one-cell rills of a hillside.
 DRAINAGE_MIN_AREA_M2 = 2000.0
@@ -102,10 +112,10 @@ NODATA_FILL_MAX_M = 20.0
 NODATA_FILL_SMOOTHING = 2
 
 _COS_45 = math.sqrt(0.5)
-# A guide's highest point within this (m) of an end counts as its high end.
-_HIGH_END_M = 1.0
-# Clearance (m) that keeps two lines of one pattern from touching.
-_TOUCH_M = 0.01
+# A line's end counts as its high end when no point of the line is more than
+# this (m) above it; otherwise the line is split at its highest point, so no
+# emitted line carries a hump.
+_HUMP_TOL_M = 0.02
 _NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
@@ -403,24 +413,51 @@ def _gradient(dem, inv, a, e, x, y, h):
     return ((z(x + h, y) - z(x - h, y)) / (2 * h), (z(x, y + h) - z(x, y - h)) / (2 * h))
 
 
-def _walk(dem, transform, mask, x0, y0, grade, side, step):
-    """Points from (x0, y0) following the contour with the design grade."""
+def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None):
+    """Points from (x0, y0) following the contour with the design grade.
+
+    `away` = (distance grid, metres): the walk also ends once the grid value
+    under it drops that much below the largest it has seen (the layout passes
+    the distance to drainage, so a line stops closing in on a drainage line).
+    `flat` is `dem.ravel().tolist()` when the caller walks the same DEM many
+    times (Python list indexing is several times faster than numpy's).
+    """
     inv = ~transform
     ny, nx = mask.shape
+    # Inline the inverse affine and the bilinear surface (same arithmetic as
+    # `_z_at`): the walk is the hot loop of the layout.
+    ia, ib, ic, id_, ie, if_ = inv.a, inv.b, inv.c, inv.d, inv.e, inv.f
+    z = flat if flat is not None else np.asarray(dem, dtype=float).ravel().tolist()
+
+    def zf(px, py):
+        c = ia * px + ib * py + ic - 0.5
+        r = id_ * px + ie * py + if_ - 0.5
+        r = min(max(r, 0.0), ny - 1.0)
+        c = min(max(c, 0.0), nx - 1.0)
+        r0, c0 = min(int(r), ny - 2), min(int(c), nx - 2)
+        fr, fc = r - r0, c - c0
+        k = r0 * nx + c0
+        top = z[k] * (1 - fc) + z[k + 1] * fc
+        bot = z[k + nx] * (1 - fc) + z[k + nx + 1] * fc
+        return top * (1 - fr) + bot * fr
+
     pts = []
     x, y = x0, y0
-    z0 = _z_at(dem, inv, x0, y0)
+    z0 = zf(x0, y0)
     travelled = 0.0
     headings = []
     window = max(1, int(round(TIGHT_TURN_RUN_M / step)))
+    far = -math.inf
+    h = step
     for _ in range(int(4 * (ny + nx) * abs(transform.a) / step) + 10):
-        gx, gy = _gradient(dem, inv, transform.a, transform.e, x, y, step)
+        gx = (zf(x + h, y) - zf(x - h, y)) / (2 * h)
+        gy = (zf(x, y + h) - zf(x, y - h)) / (2 * h)
         g = math.hypot(gx, gy)
         # Below the design grade the slope cannot carry the line: flat ground
         # or a ridge crest, so the line ends. No elevation (NaN) ends it too.
         if not math.isfinite(g) or g < grade:
             break
-        z_here = _z_at(dem, inv, x, y)
+        z_here = zf(x, y)
         if not math.isfinite(z_here):
             break
         ux, uy = -gx / g, -gy / g            # downhill unit vector
@@ -436,10 +473,15 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step):
         ca = math.sqrt(1 - s * s)
         dx, dy = ca * tx + s * ux, ca * ty + s * uy
         nxp, nyp = x + step * dx, y + step * dy
-        c, r = inv @ (nxp, nyp)
-        ri, ci = int(math.floor(r)), int(math.floor(c))
+        ri = int(math.floor(id_ * nxp + ie * nyp + if_))
+        ci = int(math.floor(ia * nxp + ib * nyp + ic))
         if not (0 <= ri < ny and 0 <= ci < nx) or not mask[ri, ci]:
             break
+        if away is not None:
+            v = away[0][ri, ci]
+            far = max(far, v)
+            if v < far - away[1]:
+                break
         pts.append((nxp, nyp))
         headings.append((dx, dy))
         travelled += step
@@ -571,16 +613,6 @@ def _grade_split(line: LineString, dem, transform, cap: float, min_len: float) -
     return pieces, rejected
 
 
-def _dilate(m: np.ndarray) -> np.ndarray:
-    """Cells of `m` and their 8 neighbours."""
-    out = m.copy()
-    out[1:, :] |= m[:-1, :]
-    out[:-1, :] |= m[1:, :]
-    out[:, 1:] |= out[:, :-1]
-    out[:, :-1] |= out[:, 1:].copy()
-    return out
-
-
 def _clip(line, region) -> list:
     """LineString pieces of `line` inside `region`."""
     if line.is_empty:
@@ -605,6 +637,36 @@ def _usable_area(parcel_utm, dem, transform):
     return parcel_utm.difference(shapely.union_all(holes).buffer(cell, join_style="mitre"))
 
 
+def _falling_parts(line: LineString, dem, transform, drain_dist, min_len: float) -> list:
+    """`line` split at its highest point into parts that each start high; only
+    parts at least `min_len` long whose low end is farther from drainage than
+    their high end are kept (`drain_dist(points)` -> distances, or None when
+    there is no drainage: then only the hump split applies). So no emitted
+    line has a hump or sends water towards a drainage line.
+    """
+    from shapely.ops import substring
+
+    d, z = _profile(line, dem, ~transform, abs(transform.a) / GRADE_SAMPLES_PER_CELL)
+    if not np.isfinite(z).any():
+        return []
+    k = int(np.nanargmax(z))
+    if z[k] - z[0] <= _HUMP_TOL_M:
+        parts = [(line, False)]
+    elif z[k] - z[-1] <= _HUMP_TOL_M:
+        parts = [(line, True)]
+    else:
+        parts = [(substring(line, 0.0, d[k]), True), (substring(line, d[k], line.length), False)]
+    kept = []
+    for a, high_at_end in parts:
+        if a.length < min_len:
+            continue
+        ends = [a.coords[-1], a.coords[0]] if high_at_end else [a.coords[0], a.coords[-1]]
+        dist = drain_dist(ends)
+        if dist is None or dist[1] > dist[0]:
+            kept.append(a)
+    return kept
+
+
 def keyline_layout(
     dem: np.ndarray,
     transform: Affine,
@@ -614,68 +676,93 @@ def keyline_layout(
     spacing_m: float,
     grade: float = DEFAULT_GRADE,
     max_lines: Optional[int] = None,
-    min_segment_m: float = MIN_SEGMENT_M,
+    min_line_m: float = DEFAULT_MIN_LINE_M,
     flow_accum: Optional[np.ndarray] = None,
 ) -> dict:
-    """Keylines, their parallels and new guides covering the parcel.
+    """Keylines and lines traced at the design grade across the parcel.
 
-    Each keypoint's keyline (traced at `grade`) is a guide. Parallels are
-    true offsets of a guide at multiples of `spacing_m` on both sides
-    (positive = left = uphill = "up", per `trace_keyline`'s orientation),
-    kept only where their real fall stays within `MAX_LINE_GRADE` over every
-    `GRADE_WINDOW_M` run (owner rule). A side stops at the first offset that
-    keeps nothing. Where an offset was too steep, a new guide (direction
-    "guide") is traced at `grade` from that spot, one spacing beyond the last
-    kept line, with the keyline's tracing rules; uncovered ground next to the
-    pattern seeds guides too, until the parcel is covered or no seed takes.
-    With `max_lines` set, only the keylines and up to that many parallels per
-    side are drawn (no new guides).
+    Each keypoint's keyline is traced at `grade` (both arms falling away from
+    the valley) and is the guide the layout starts from. Every other line is
+    traced on the terrain at `grade` too, from a seed one spacing across the
+    slope (along the local normal) from an already placed line, every spacing
+    along it; seeds nearest drainage go first. Rules for each line:
 
-    Lines are clipped to the parcel minus unfilled nodata. Lines of a later
-    guide are cut back where they come within half a spacing of an earlier
-    guide's line (patterns meet at a seam, never cross). Every entry carries
-    its measured `grade` (mean fall) and `max_grade_20m`; pieces shorter than
-    `min_segment_m` are dropped. Guides are processed nearest offset first,
-    keylines (main valley first) before seeded guides.
+    - real fall within `MAX_LINE_GRADE` over every `GRADE_WINDOW_M` run
+      (steeper stretches are cut out);
+    - fall away from drainage: drainage lines are the cells of `flow_accum`
+      (analysis cells) draining at least `DRAINAGE_MIN_AREA_M2`; a line runs
+      from its high end on the drainage side to where it is farthest from
+      drainage (the ridge), it is split at any hump and only parts whose low
+      end is farther from drainage than their high end are kept;
+    - never closer than `CLEARANCE_FRACTION` x spacing to another line;
+    - contiguous pieces are joined; lines shorter than `min_line_m` are
+      dropped (keylines are kept down to `MIN_SEGMENT_M`, as the guide);
+    - clipped to the parcel minus unfilled nodata.
 
-    Fall direction (spec: water moves from the valleys towards the ridges):
-    drainage lines are the cells of `flow_accum` (analysis cells) draining at
-    least `DRAINAGE_MIN_AREA_M2`. Each keyline arm, and the one arm a seeded
-    guide keeps, starts at its high end and ends where it is farthest from
-    drainage (the ridge between two drainage lines); a seeded guide keeps the
-    arms that move away from drainage, each as its own guide starting at the
-    seed; every emitted guide piece is split at its highest point and only
-    the parts falling away from drainage are kept, so no guide falls towards a
-    valley. Without drainage cells (or `flow_accum`) no direction is preferred.
+    When the seeds next to placed lines run out, open ground nearest drainage
+    seeds a new start. With `max_lines` set, only that many rows of lines are
+    seeded out from the keylines (no new starts). Without drainage cells (or
+    `flow_accum`) no fall direction is preferred.
 
-    Returns {"lines": [entries], "coverage_truncated": bool (the seed limit
-    `MAX_FAILED_SEEDS` stopped the layout), "failed_seeds": int}; entries are
-    {geometry, direction ("keyline"|"guide"|"up"|"down"), offset_m (from its
-    guide), grade, max_grade_20m, guide, valley}.
+    Returns {"lines": [entries], "coverage_pct": parcel % within half a
+    spacing of a line, "coverage_truncated": bool (the seed limit
+    `MAX_FAILED_SEEDS` stopped the layout with ground left), "failed_seeds":
+    int}; entries are {geometry, direction ("keyline"|"line"), grade,
+    max_grade_20m, valley}.
     """
+    import heapq
     from rasterio import features
+    from shapely.ops import unary_union
 
+    empty = {"lines": [], "coverage_pct": 0.0, "coverage_truncated": False, "failed_seeds": 0}
     region = _usable_area(parcel_utm, dem, transform)
-    if region.is_empty:
-        return {"lines": [], "coverage_truncated": False, "failed_seeds": 0}
+    if region.is_empty or parcel_utm.area <= 0:
+        return empty
     shape_ = dem.shape
+    inv = ~transform
+    cell = abs(transform.a)
+    step = cell / TRACE_STEPS_PER_CELL
+    cap = MAX_LINE_GRADE - GRADE_MARGIN
+    clear_m = CLEARANCE_FRACTION * spacing_m
     trace_mask = np.asarray(trace_mask, dtype=bool) & np.isfinite(dem)
     work = features.rasterize([(region, 1)], out_shape=shape_, transform=transform,
                               fill=0, dtype="uint8").astype(bool) & trace_mask
-    covered = np.zeros(shape_, bool)   # within half a spacing of a kept line
-    near = np.zeros(shape_, bool)      # within one spacing of a kept line
-    dead = np.zeros(shape_, bool)      # around seeds whose guide kept nothing
-    rim = shapely.points(shapely.get_coordinates(
-        shapely.segmentize(parcel_utm.boundary, max(spacing_m, 1.0))))
-    gap = spacing_m / 2.0
-    cap = MAX_LINE_GRADE - GRADE_MARGIN
-    inv = ~transform
-    out, zones, seeds = [], {}, []
+    flat = np.asarray(dem, dtype=float).ravel().tolist()
+    blocked = np.zeros(shape_, bool)   # within the clearance of a line: no trace
+    served = np.zeros(shape_, bool)    # within the seed clearance of a line: no seed
+    dead = np.zeros(shape_, bool)      # around seeds that gave no line
+
+    # Drainage cells, and the distance to them of every cell (seed order).
+    drain_tree = None
+    if flow_accum is not None:
+        rc = np.argwhere(np.nan_to_num(flow_accum) * abs(transform.a * transform.e)
+                         >= DRAINAGE_MIN_AREA_M2)
+        if len(rc):
+            dx, dy = transform @ (rc[:, 1] + 0.5, rc[:, 0] + 0.5)
+            drain_tree = shapely.STRtree(shapely.points(dx, dy))
+
+    def drain_dist(pts):
+        if drain_tree is None:
+            return None
+        xy = np.asarray(pts, dtype=float).reshape(-1, 2)
+        _, dist = drain_tree.query_nearest(shapely.points(xy[:, 0], xy[:, 1]),
+                                           return_distance=True, all_matches=False)
+        return dist
+
+    cell_dist = np.zeros(shape_)
+    if drain_tree is not None:
+        rows, cols = np.nonzero(trace_mask)
+        cx, cy = transform @ (cols + 0.5, rows + 0.5)
+        cell_dist[rows, cols] = drain_dist(np.column_stack([cx, cy]))
+
+    def to_cell(x, y):
+        c, r = inv @ (x, y)
+        ri, ci = int(math.floor(r)), int(math.floor(c))
+        return (ri, ci) if 0 <= ri < shape_[0] and 0 <= ci < shape_[1] else None
 
     def paint(geom, radii_targets):
-        """Mark the cells whose centre lies within each radius of `geom` in
-        its target array (radii in decreasing order)."""
-        reach = radii_targets[0][0]
+        """Mark the cells whose centre lies within each radius of `geom`."""
+        reach = max(r for r, _ in radii_targets)
         minx, miny, maxx, maxy = geom.bounds
         ca, rb = inv @ (minx - reach, miny - reach)
         cb, ra = inv @ (maxx + reach, maxy + reach)
@@ -690,89 +777,13 @@ def keyline_layout(
         for radius, target in radii_targets:
             target[r0:r1, c0:c1] |= dist <= radius
 
-    def zone(i, radius):
-        if (i, radius) not in zones:
-            zones[(i, radius)] = out[i]["geometry"].buffer(radius)
-        return zones[(i, radius)]
-
-    boxes = np.empty((0, 4))  # bounds of the kept lines, to skip far ones
-
-    def accept(line, gid, valley, direction, offset) -> bool:
-        nonlocal boxes
-        kept = False
-        for piece in _clip(line, region):
-            if piece.length < min_segment_m:
-                continue
-            good, rejected = _grade_split(piece, dem, transform, cap, min_segment_m)
-            seeds.extend(rejected)
-            for part, _, _ in good:
-                px0, py0, px1, py1 = part.bounds
-                for i in np.flatnonzero((boxes[:, 0] <= px1 + gap) & (boxes[:, 2] >= px0 - gap)
-                                        & (boxes[:, 1] <= py1 + gap) & (boxes[:, 3] >= py0 - gap)):
-                    o = out[i]
-                    radius = gap if o["guide"] != gid else _TOUCH_M
-                    if o["geometry"].dwithin(part, radius):
-                        part = part.difference(zone(i, radius))
-                        if part.is_empty:
-                            break
-                merged = shapely.line_merge(part) if part.geom_type == "MultiLineString" else part
-                for sub in shapely.get_parts(merged):
-                    if sub.geom_type != "LineString" or sub.length < min_segment_m:
-                        continue
-                    # Measured again on what is emitted: never above the cap.
-                    finals = _grade_split(sub, dem, transform, cap, min_segment_m)[0]
-                    if direction == "guide":
-                        # a guide starts high next to drainage and falls away
-                        finals = [f for piece_ in finals for arm_ in falls_away(piece_[0])
-                                  for f in _grade_split(arm_, dem, transform, cap, min_segment_m)[0]
-                                  if falls_away(f[0]) == [f[0]]]
-                    for final, mean, worst in finals:
-                        boxes = np.vstack([boxes, final.bounds])
-                        out.append({"geometry": final, "direction": direction,
-                                    "offset_m": float(offset), "grade": mean,
-                                    "max_grade_20m": worst, "guide": gid, "valley": valley})
-                        paint(final, [(spacing_m, near), (gap, covered)])
-                        kept = True
-        return kept
-
-    guides = []  # [line, gid, next k, open sides, kmax]
-
-    def add_guide(line, valley, direction) -> bool:
-        gid = len(guides)
-        if line is None or line.is_empty or line.length == 0:
-            return False
-        if not accept(line, gid, valley, direction, 0.0):
-            return False
-        reach = float(shapely.distance(rim, line).max()) if len(rim) else 0.0
-        kmax = int(reach // spacing_m) + 1
-        if max_lines is not None:
-            kmax = min(kmax, max_lines)
-        guides.append([line, gid, 1, {1, -1} if kmax >= 1 else set(), kmax])
-        return True
-
-    # Drainage cells and the distance to them, for the fall direction.
-    drain_tree = None
-    if flow_accum is not None:
-        cell_area = abs(transform.a * transform.e)
-        rc = np.argwhere(np.nan_to_num(flow_accum) * cell_area >= DRAINAGE_MIN_AREA_M2)
-        if len(rc):
-            dx, dy = transform @ (rc[:, 1] + 0.5, rc[:, 0] + 0.5)
-            drain_tree = shapely.STRtree(shapely.points(dx, dy))
-    step = abs(transform.a) / TRACE_STEPS_PER_CELL
-
-    def drain_dist(pts):
-        if drain_tree is None:
-            return None
-        xy = np.asarray(pts, dtype=float)
-        _, dist = drain_tree.query_nearest(shapely.points(xy[:, 0], xy[:, 1]), return_distance=True,
-                                           all_matches=False)
-        return dist
-
     def arm(x0, y0, side, mask):
         """Points of one arm from (x0, y0), cut where it is farthest from
         drainage (beyond that it would fall towards another drainage line),
         and how much farther from drainage its end is than its start."""
-        pts = [(x0, y0)] + _walk(dem, transform, mask, x0, y0, grade, side, step)
+        pts = [(x0, y0)] + _walk(dem, transform, mask, x0, y0, grade, side, step,
+                                 away=None if drain_tree is None else (cell_dist, DRAINAGE_APPROACH_M + 2 * cell),
+                                 flat=flat)
         dist = drain_dist(pts)
         if dist is None:
             return pts, math.inf
@@ -783,36 +794,98 @@ def keyline_layout(
         far = int(np.argmax(dist[:stop]))
         return pts[:far + 1], float(dist[far] - dist[0])
 
-    def falls_away(line):
-        """`line` split at its highest point into arms that each start high;
-        only arms whose low end is farther from drainage than their high end
-        are kept, so a guide never sends water towards a drainage line."""
-        from shapely.ops import substring
-
-        d, z = _profile(line, dem, inv, abs(transform.a) / GRADE_SAMPLES_PER_CELL)
-        if not np.isfinite(z).any():
-            return []
-        k = int(np.nanargmax(z))
-        if d[k] <= _HIGH_END_M:                                    # already starts high
-            arms = [(line, False)]
-        elif line.length - d[k] <= _HIGH_END_M:                    # ends high
-            arms = [(line, True)]
-        else:
-            arms = [(substring(line, 0.0, d[k]), True), (substring(line, d[k], line.length), False)]
-        kept = []
-        for a, high_at_end in arms:
-            if a.length < min_segment_m:
-                continue
-            ends = [a.coords[-1], a.coords[0]] if high_at_end else [a.coords[0], a.coords[-1]]
-            dist = drain_dist(ends)
-            if dist is None or dist[1] > dist[0]:
-                kept.append(a)
-        return kept
-
     def oriented(pts, side):
         # `_walk` keeps uphill on the left of travel for side=+1 and on the
         # right for side=-1: flip the latter so uphill is always on the left.
         return pts if side > 0 else pts[::-1]
+
+    def falls_away(line):
+        return _falling_parts(line, dem, transform, drain_dist, MIN_SEGMENT_M)
+
+    def valid(piece) -> list:
+        """(piece, mean, worst) for the parts of `piece` within the cap and
+        (for lines) falling away from drainage, at least MIN_SEGMENT_M."""
+        out_ = []
+        for part, _, _ in _grade_split(piece, dem, transform, cap, MIN_SEGMENT_M)[0]:
+            for a in falls_away(part):
+                for f in _grade_split(a, dem, transform, cap, MIN_SEGMENT_M)[0]:
+                    if falls_away(f[0]) == [f[0]]:
+                        out_.append(f)
+        return out_
+
+    out = []
+    boxes = np.empty((0, 4))
+
+    def place(line, valley) -> list:
+        """Clip, check and emit `line`; returns the emitted geometries."""
+        nonlocal boxes
+        is_keyline = valley is not None
+        pieces = []
+        for piece in _clip(line, region):
+            if piece.length < MIN_SEGMENT_M:
+                continue
+            px0, py0, px1, py1 = piece.bounds
+            for i in np.flatnonzero((boxes[:, 0] <= px1 + clear_m) & (boxes[:, 2] >= px0 - clear_m)
+                                    & (boxes[:, 1] <= py1 + clear_m) & (boxes[:, 3] >= py0 - clear_m)):
+                if out[i]["geometry"].dwithin(piece, clear_m):
+                    piece = piece.difference(out[i]["geometry"].buffer(clear_m))
+                    if piece.is_empty:
+                        break
+            merged = shapely.line_merge(piece) if piece.geom_type == "MultiLineString" else piece
+            for sub in shapely.get_parts(merged):
+                if sub.geom_type != "LineString" or sub.length < MIN_SEGMENT_M:
+                    continue
+                if is_keyline:
+                    pieces.extend(_grade_split(sub, dem, transform, cap, MIN_SEGMENT_M)[0])
+                else:
+                    pieces.extend(valid(sub))
+        # Join pieces that meet end to end when the joined line still passes.
+        if len(pieces) > 1 and not is_keyline:
+            joined = shapely.line_merge(shapely.MultiLineString([p[0] for p in pieces]))
+            parts = list(shapely.get_parts(joined))
+            if len(parts) < len(pieces):
+                rejoined = []
+                for g in parts:
+                    v = valid(g)
+                    if len(v) == 1 and abs(v[0][0].length - g.length) < 1e-6:
+                        rejoined.append(v[0])
+                    else:
+                        rejoined.extend(p for p in pieces if g.covers(p[0]))
+                pieces = rejoined
+        shortest = MIN_SEGMENT_M if is_keyline else min_line_m
+        placed = []
+        for geom, mean, worst in pieces:
+            if geom.length < shortest:
+                continue
+            out.append({"geometry": geom, "direction": "keyline" if is_keyline else "line",
+                        "grade": mean, "max_grade_20m": worst, "valley": valley})
+            boxes = np.vstack([boxes, geom.bounds])
+            paint(geom, [(SEED_CLEARANCE_FRACTION * spacing_m, served), (clear_m, blocked)])
+            placed.append(geom)
+        return placed
+
+    heap, counter = [], 0
+
+    def add_seeds(geom, gen):
+        """Seeds one spacing across the slope from `geom`, every spacing."""
+        nonlocal counter
+        if max_lines is not None and gen > max_lines:
+            return
+        for s_ in np.arange(spacing_m / 2.0, geom.length, spacing_m):
+            a = geom.interpolate(max(0.0, s_ - 1.0))
+            b = geom.interpolate(min(geom.length, s_ + 1.0))
+            tx, ty = b.x - a.x, b.y - a.y
+            n = math.hypot(tx, ty)
+            if n == 0:
+                continue
+            p = geom.interpolate(s_)
+            for sign in (1, -1):
+                x, y = p.x - sign * ty / n * spacing_m, p.y + sign * tx / n * spacing_m
+                rc_ = to_cell(x, y)
+                if rc_ is None or not work[rc_] or served[rc_]:
+                    continue
+                counter += 1
+                heapq.heappush(heap, (float(cell_dist[rc_]), counter, x, y, gen))
 
     def keyline_from(kp):
         plus, _ = arm(kp["x"], kp["y"], +1, trace_mask)
@@ -820,69 +893,57 @@ def keyline_layout(
         coords = oriented(minus, -1)[:-1] + oriented(plus, +1)
         return LineString(coords) if len(coords) >= 2 else None
 
-    def guides_from(x0, y0, mask):
-        """The arms from a seed that move away from drainage, each a guide
-        whose high end is the seed."""
-        out_arms = []
-        for side in (1, -1):
-            pts, gain = arm(x0, y0, side, mask)
-            if len(pts) >= 2 and gain > 0:
-                out_arms.append(LineString(oriented(pts, side)))
-        return out_arms
-
     for v, kp in enumerate(keypoints):
-        add_guide(keyline_from(kp), v, "keyline")
+        kl = keyline_from(kp)
+        if kl is not None:
+            for g in place(kl, v):
+                add_seeds(g, 1)
 
-    failures = 0
-    truncated = False
+    rows, cols = np.nonzero(work)
+    order = np.argsort(cell_dist[rows, cols], kind="stable")
+    order_rc = list(zip(rows[order].tolist(), cols[order].tolist()))
+    start_at = 0
+    failures, truncated = 0, False
     while True:
-        open_guides = [g for g in guides if g[3]]
-        if open_guides:
-            g = min(open_guides, key=lambda t: (t[2], t[1]))
-            line, gid, k, sides, kmax = g
-            for side in sorted(sides, reverse=True):
-                off = line.offset_curve(side * k * spacing_m)
-                kept = (not off.is_empty) and accept(off, gid, None, "up" if side > 0 else "down",
-                                                     side * k * spacing_m)
-                if not kept or k >= kmax:
-                    sides.discard(side)
-            g[2] = k + 1
-            continue
-        if max_lines is not None:
-            break
         seed = None
-        while seeds and seed is None:
-            x, y = seeds.pop()
-            c, r = inv @ (x, y)
-            ri, ci = int(math.floor(r)), int(math.floor(c))
-            if 0 <= ri < shape_[0] and 0 <= ci < shape_[1] and work[ri, ci] \
-                    and not covered[ri, ci] and not dead[ri, ci]:
-                seed = (ri, ci)
+        while heap and seed is None:
+            _, _, x, y, gen = heapq.heappop(heap)
+            rc_ = to_cell(x, y)
+            if rc_ is not None and work[rc_] and not served[rc_] and not dead[rc_]:
+                seed = (x, y, gen)
+        if seed is None and max_lines is None:
+            # open ground, nearest drainage first
+            while start_at < len(order):
+                ri, ci = order_rc[start_at]
+                start_at += 1
+                if not served[ri, ci] and not dead[ri, ci]:
+                    x, y = transform @ (ci + 0.5, ri + 0.5)
+                    seed = (x, y, 1)
+                    break
         if seed is None:
-            # One spacing beyond the kept lines first (the next line of the
-            # pattern), then open ground away from any line, then what is left
-            # between half a spacing and a spacing from lines.
-            free = work & ~covered & ~dead
-            far = free & ~near
-            ring = far & _dilate(near)
-            pick = next((m for m in (ring, far, free) if m.any()), None)
-            if pick is None:
-                break
-            ri, ci = (int(v) for v in np.argwhere(pick)[0])
-            seed = (ri, ci)
+            break
         if failures >= MAX_FAILED_SEEDS:
-            # Ground is left that might still take a guide.
             truncated = True
             break
-        ri, ci = seed
-        x, y = transform @ (ci + 0.5, ri + 0.5)
-        kp = {"row": ri, "col": ci, "x": float(x), "y": float(y), "z": float(dem[ri, ci])}
-        # A new guide runs over ground the pattern does not cover yet: where it
-        # reaches another line's half spacing it would be cut there anyway.
-        made = [add_guide(g, None, "guide") for g in guides_from(kp["x"], kp["y"], trace_mask & ~covered)]
-        if not any(made):
-            # Nothing usable from here (flat, nodata edge, squeezed between
-            # patterns): do not seed this spot again.
-            paint(shapely.Point(x, y), [(gap, dead)])
+        x, y, gen = seed
+        made, traced = [], []
+        for side in (1, -1):
+            pts, gain = arm(x, y, side, work & ~blocked)
+            if len(pts) >= 2 and gain > 0:
+                traced.append(LineString(oriented(pts, side)))
+                if traced[-1].length >= min_line_m:      # else nothing could be kept
+                    made.extend(place(traced[-1], None))
+        for g in made:
+            add_seeds(g, gen + 1)
+        if not made:
+            # Seeds on this contour would trace the same refused line: do not
+            # seed along it again.
+            paint(shapely.Point(x, y), [(clear_m, dead)])
+            for t in traced:
+                paint(t, [(cell, dead)])
             failures += 1
-    return {"lines": out, "coverage_truncated": truncated, "failed_seeds": failures}
+
+    covered = unary_union([o["geometry"].buffer(spacing_m / 2.0) for o in out]) if out else None
+    coverage = 100.0 * covered.intersection(parcel_utm).area / parcel_utm.area if out else 0.0
+    return {"lines": out, "coverage_pct": coverage, "coverage_truncated": truncated,
+            "failed_seeds": failures}
