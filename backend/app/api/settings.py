@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Literal
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from nkz_platform_sdk import AuthContext
 from pydantic import BaseModel, field_validator
 
@@ -28,8 +28,16 @@ class SettingsBody(BaseModel):
         return v
 
 
+def _check_parcel_id(parcel_id: str) -> None:
+    """The id becomes part of an object key: refuse anything that could leave its folder."""
+    short = parcel_id.rsplit(":", 1)[-1]
+    if not parcel_id or not short or "/" in parcel_id or "\\" in parcel_id or ".." in parcel_id:
+        raise HTTPException(status_code=422, detail="invalid parcel id")
+
+
 @router.get("/{parcel_id}/settings")
 def get_parcel_settings(parcel_id: str, auth: AuthContext = require_auth()):
+    _check_parcel_id(parcel_id)
     return asdict(parcel_settings.load_settings(auth.tenant_id, parcel_id))
 
 
@@ -37,6 +45,7 @@ def get_parcel_settings(parcel_id: str, auth: AuthContext = require_auth()):
 def put_parcel_settings(
     parcel_id: str, body: SettingsBody, auth: AuthContext = require_auth(roles=_WRITE_ROLES)
 ):
+    _check_parcel_id(parcel_id)
     saved = parcel_settings.save_settings(
         auth.tenant_id, parcel_id, body.mode, body.return_period_years, auth.user_id
     )

@@ -95,3 +95,22 @@ def test_put_rejects_unknown_mode_and_period(client, s3):
     assert client.put(URL, json={"mode": "flood", "return_period_years": 10}, headers=h).status_code == 422
     assert client.put(URL, json={"mode": "storm", "return_period_years": 50}, headers=h).status_code == 422
     assert s3.store == {}
+
+
+@pytest.mark.parametrize("bad", ["urn:ngsi-ld:AgriParcel:..", "a..b", "urn:ngsi-ld:AgriParcel:", "a%5Cb"])
+def test_unsafe_parcel_id_is_422_and_nothing_stored(client, s3, bad):
+    url = f"/api/v1/hydrology/parcels/{bad}/settings"
+    h = _headers("TenantAdmin")
+    assert client.get(url, headers=h).status_code == 422
+    assert client.put(url, json={"mode": "storm", "return_period_years": 10}, headers=h).status_code == 422
+    assert s3.store == {}
+
+
+@pytest.mark.parametrize("bad", ["..", "a%2F..%2Fb", "a%2Fb"])
+def test_path_tricks_never_reach_storage(client, s3, bad):
+    # the router refuses these before the handler (404); either way nothing is read or written
+    url = f"/api/v1/hydrology/parcels/{bad}/settings"
+    h = _headers("TenantAdmin")
+    assert client.get(url, headers=h).status_code in (404, 422)
+    assert client.put(url, json={"mode": "storm", "return_period_years": 10}, headers=h).status_code in (404, 422)
+    assert s3.store == {}
