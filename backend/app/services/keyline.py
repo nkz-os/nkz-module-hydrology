@@ -36,6 +36,27 @@ DEFAULT_GRADE = 0.005
 # it runs down the valley instead of across the slope; 0.5 (30 degrees) still
 # recovers 0.5 m of error per metre of slope gradient per step.
 MAX_STEER = 0.5
+# Ruling (round 4): no line may hold an interior local high more than 5 cm
+# above its neighbouring lows (prominence on the analysis DEM sampled every
+# 0.1 m): water would stop in the dip before it. The trace never rises more
+# than COUNTER_SLOPE_TOL_M above the lowest point it has reached, checked
+# every NO_CLIMB_SAMPLE_M along each step, and placed lines are split where
+# they still do (see `_falling_parts`). 3 cm keeps 2 cm below the ruling;
+# 2 m DEMs carry 1-3 cm of micro-relief per metre, which ends more lines
+# early at a tighter bound (2 cm: coverage 16 % instead of 19 % on a hilly
+# real parcel).
+COUNTER_SLOPE_TOL_M = 0.03
+NO_CLIMB_SAMPLE_M = 0.1
+# A keyline starts at its keypoint on the valley floor: its first steps cross
+# the floor and climb the side slope (a few cm) before it falls away at
+# grade, so the rule applies to its arms past this run (m). The trace leaves
+# a rounded 2 m-cell floor within about 3 m; the keypoint stays the keyline's
+# high point by design.
+KEYLINE_START_FREE_M = 3.0
+# Bisection steps for the smallest steer whose step does not climb (see
+# `_walk`): 8 halvings of the steer range fix the heading to within about
+# 0.2 degrees (4 mm sideways over a 1 m step).
+NO_CLIMB_BISECTIONS = 8
 
 # Owner rules (spec, "Owner decision after real-terrain review" and "... second
 # real-terrain review"): every line is traced on the terrain at the design
@@ -112,10 +133,6 @@ NODATA_FILL_MAX_M = 20.0
 NODATA_FILL_SMOOTHING = 2
 
 _COS_45 = math.sqrt(0.5)
-# A line's end counts as its high end when no point of the line is more than
-# this (m) above it; otherwise the line is split at its highest point, so no
-# emitted line carries a hump.
-_HUMP_TOL_M = 0.02
 _NEIGHBOURS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
@@ -413,7 +430,7 @@ def _gradient(dem, inv, a, e, x, y, h):
     return ((z(x + h, y) - z(x - h, y)) / (2 * h), (z(x, y + h) - z(x, y - h)) / (2 * h))
 
 
-def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None):
+def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None, free_m=0.0):
     """Points from (x0, y0) following the contour with the design grade.
 
     `away` = (distance grid, metres): the walk also ends once the grid value
@@ -421,6 +438,9 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None)
     the distance to drainage, so a line stops closing in on a drainage line).
     `flat` is `dem.ravel().tolist()` when the caller walks the same DEM many
     times (Python list indexing is several times faster than numpy's).
+    The elevation never rises more than `COUNTER_SLOPE_TOL_M` above the
+    lowest it has reached, except over the first `free_m` metres (a keyline
+    starts on the valley floor, where its first step climbs the side slope).
     """
     inv = ~transform
     ny, nx = mask.shape
@@ -429,21 +449,59 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None)
     ia, ib, ic, id_, ie, if_ = inv.a, inv.b, inv.c, inv.d, inv.e, inv.f
     z = flat if flat is not None else np.asarray(dem, dtype=float).ravel().tolist()
 
+    rmax, cmax, rk, ck = ny - 1.0, nx - 1.0, ny - 2, nx - 2
+
     def zf(px, py):
         c = ia * px + ib * py + ic - 0.5
         r = id_ * px + ie * py + if_ - 0.5
-        r = min(max(r, 0.0), ny - 1.0)
-        c = min(max(c, 0.0), nx - 1.0)
-        r0, c0 = min(int(r), ny - 2), min(int(c), nx - 2)
+        r = 0.0 if r < 0.0 else (rmax if r > rmax else r)
+        c = 0.0 if c < 0.0 else (cmax if c > cmax else c)
+        r0 = int(r)
+        c0 = int(c)
+        r0 = rk if r0 > rk else r0
+        c0 = ck if c0 > ck else c0
         fr, fc = r - r0, c - c0
         k = r0 * nx + c0
         top = z[k] * (1 - fc) + z[k + 1] * fc
         bot = z[k + nx] * (1 - fc) + z[k + nx + 1] * fc
         return top * (1 - fr) + bot * fr
 
+    sub = max(1, int(math.ceil(step / NO_CLIMB_SAMPLE_M)))
+    ts = [(k + 1) / sub for k in range(sub)]
+
+    def step_low(px, py, lowest):
+        """Lowest elevation reached by the end of the step from (x, y) to
+        (px, py), from `lowest` before it, sampled `sub` times; None as soon
+        as a sample is more than COUNTER_SLOPE_TOL_M above the lowest point
+        before it. Same arithmetic as `zf`, inlined: this is the inner loop
+        of the layout."""
+        ca0 = ia * x + ib * y + ic - 0.5
+        ra0 = id_ * x + ie * y + if_ - 0.5
+        dcol = ia * (px - x) + ib * (py - y)
+        drow = id_ * (px - x) + ie * (py - y)
+        for t in ts:
+            c = ca0 + t * dcol
+            r = ra0 + t * drow
+            r = 0.0 if r < 0.0 else (rmax if r > rmax else r)
+            c = 0.0 if c < 0.0 else (cmax if c > cmax else c)
+            r0 = int(r)
+            c0 = int(c)
+            r0 = rk if r0 > rk else r0
+            c0 = ck if c0 > ck else c0
+            fr, fc = r - r0, c - c0
+            k = r0 * nx + c0
+            v = ((z[k] * (1 - fc) + z[k + 1] * fc) * (1 - fr)
+                 + (z[k + nx] * (1 - fc) + z[k + nx + 1] * fc) * fr)
+            if not v <= lowest + COUNTER_SLOPE_TOL_M:     # climbs, or NaN
+                return None
+            if v < lowest:
+                lowest = v
+        return lowest
+
     pts = []
     x, y = x0, y0
     z0 = zf(x0, y0)
+    zmin = z0
     travelled = 0.0
     headings = []
     window = max(1, int(round(TIGHT_TURN_RUN_M / step)))
@@ -473,6 +531,37 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None)
         ca = math.sqrt(1 - s * s)
         dx, dy = ca * tx + s * ux, ca * ty + s * uy
         nxp, nyp = x + step * dx, y + step * dy
+        # Water runs along the line from its start: the line never climbs
+        # more than COUNTER_SLOPE_TOL_M above the lowest point it has reached,
+        # checked every NO_CLIMB_SAMPLE_M along the step (a step can bulge
+        # over a bump between its ends on rough ground). Where the steer
+        # above heads back up (below the target, after a dip) or the step
+        # crosses a bump, it is turned downhill just enough (after a dip the
+        # line so runs about level until its target, falling at the design
+        # grade, comes down to it); where even the largest steer climbs
+        # (across a valley axis), the line ends.
+        if travelled < free_m:
+            lowest = zf(nxp, nyp)
+        else:
+            lowest = step_low(nxp, nyp, zmin)
+            if lowest is None:
+                lo, hi = s, MAX_STEER
+                ch = math.sqrt(1 - hi * hi)
+                lowest = step_low(x + step * (ch * tx + hi * ux), y + step * (ch * ty + hi * uy), zmin)
+                if lowest is None:
+                    break
+                for _ in range(NO_CLIMB_BISECTIONS):
+                    mid = 0.5 * (lo + hi)
+                    cm = math.sqrt(1 - mid * mid)
+                    v = step_low(x + step * (cm * tx + mid * ux), y + step * (cm * ty + mid * uy), zmin)
+                    if v is None:
+                        lo = mid
+                    else:
+                        hi, lowest = mid, v
+                s = hi
+                ca = math.sqrt(1 - s * s)
+                dx, dy = ca * tx + s * ux, ca * ty + s * uy
+                nxp, nyp = x + step * dx, y + step * dy
         ri = int(math.floor(id_ * nxp + ie * nyp + if_))
         ci = int(math.floor(ia * nxp + ib * nyp + ic))
         if not (0 <= ri < ny and 0 <= ci < nx) or not mask[ri, ci]:
@@ -482,6 +571,9 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step, away=None, flat=None)
             far = max(far, v)
             if v < far - away[1]:
                 break
+        # Over the free start the reference is where the line is; then the
+        # lowest point it has reached.
+        zmin = lowest if travelled < free_m else min(zmin, lowest)
         pts.append((nxp, nyp))
         headings.append((dx, dy))
         travelled += step
@@ -519,8 +611,8 @@ def trace_keyline(dem, transform, keypoint: dict, grade: float, parcel_mask) -> 
     mask = np.asarray(parcel_mask, dtype=bool)
     step = abs(transform.a) / TRACE_STEPS_PER_CELL
     x0, y0 = keypoint["x"], keypoint["y"]
-    first = _walk(dem, transform, mask, x0, y0, grade, +1, step)
-    second = _walk(dem, transform, mask, x0, y0, grade, -1, step)
+    first = _walk(dem, transform, mask, x0, y0, grade, +1, step, free_m=KEYLINE_START_FREE_M)
+    second = _walk(dem, transform, mask, x0, y0, grade, -1, step, free_m=KEYLINE_START_FREE_M)
     coords = list(reversed(first)) + [(x0, y0)] + second
     if len(coords) < 2:
         return LineString()
@@ -637,25 +729,67 @@ def _usable_area(parcel_utm, dem, transform):
     return parcel_utm.difference(shapely.union_all(holes).buffer(cell, join_style="mitre"))
 
 
+def _monotone_ranges(z: np.ndarray, tol: float) -> list:
+    """Index ranges (i, j, high_at_end) of profile `z` (i < j, inclusive)
+    along which, walked from the high end, no point rises more than `tol`
+    above the lowest point before it, so no interior local high has a
+    prominence above `tol`.
+
+    A range whose highest point is interior (more than `tol` above both
+    ends) is split there; a range that falls from its high end, dips and
+    climbs back more than `tol` is split at the bottom of that dip and the
+    rest is examined again.
+    """
+    out, todo = [], [(0, len(z) - 1)]
+    while todo:
+        i, j = todo.pop()
+        if j <= i:
+            continue
+        seg = z[i:j + 1]
+        k = i + int(np.argmax(seg))
+        if z[k] - z[i] <= tol:
+            high_at_end = False
+        elif z[k] - z[j] <= tol:
+            high_at_end = True
+        else:
+            todo += [(i, k), (k, j)]
+            continue
+        walked = seg[::-1] if high_at_end else seg
+        climbs = np.flatnonzero(walked - np.minimum.accumulate(walked) > tol)
+        if not len(climbs):
+            out.append((i, j, high_at_end))
+            continue
+        # The dip bottom is past the start: the start is within `tol` of
+        # the highest point, so the climb cannot begin there.
+        dip = int(np.argmin(walked[:climbs[0] + 1]))
+        if high_at_end:
+            out.append((j - dip, j, True))
+            todo.append((i, j - dip))
+        else:
+            out.append((i, i + dip, False))
+            todo.append((i + dip, j))
+    return sorted(out)
+
+
 def _falling_parts(line: LineString, dem, transform, drain_dist, min_len: float) -> list:
-    """`line` split at its highest point into parts that each start high; only
-    parts at least `min_len` long whose low end is farther from drainage than
-    their high end are kept (`drain_dist(points)` -> distances, or None when
-    there is no drainage: then only the hump split applies). So no emitted
-    line has a hump or sends water towards a drainage line.
+    """`line` split into parts that each fall from one end without a
+    counter-slope (`_monotone_ranges` with `COUNTER_SLOPE_TOL_M`: at any hump
+    and at the bottom of any dip it climbs back out of); only parts at least
+    `min_len` long whose low end is farther from drainage than their high
+    end are kept (`drain_dist(points)` -> distances, or None when there is no
+    drainage: then only the splits apply). So no emitted line has a
+    counter-slope or sends water towards a drainage line. A line that needs
+    no split is returned as it is.
     """
     from shapely.ops import substring
 
     d, z = _profile(line, dem, ~transform, abs(transform.a) / GRADE_SAMPLES_PER_CELL)
-    if not np.isfinite(z).any():
+    if not np.isfinite(z).all():
         return []
-    k = int(np.nanargmax(z))
-    if z[k] - z[0] <= _HUMP_TOL_M:
-        parts = [(line, False)]
-    elif z[k] - z[-1] <= _HUMP_TOL_M:
-        parts = [(line, True)]
-    else:
-        parts = [(substring(line, 0.0, d[k]), True), (substring(line, d[k], line.length), False)]
+    parts = []
+    for i, j, high_at_end in _monotone_ranges(z, COUNTER_SLOPE_TOL_M):
+        whole = i == 0 and j == len(z) - 1
+        parts.append((line if whole else substring(line, d[i], d[j]), high_at_end))
     kept = []
     for a, high_at_end in parts:
         if a.length < min_len:
@@ -694,6 +828,9 @@ def keyline_layout(
       from its high end on the drainage side to where it is farthest from
       drainage (the ridge), it is split at any hump and only parts whose low
       end is farther from drainage than their high end are kept;
+    - no counter-slope: the trace never climbs more than
+      `COUNTER_SLOPE_TOL_M` above the lowest point it has reached, and what
+      still does is split at the bottom of the dip;
     - never closer than `CLEARANCE_FRACTION` x spacing to another line;
     - contiguous pieces are joined; lines shorter than `min_line_m` are
       dropped (keylines are kept down to `MIN_SEGMENT_M`, as the guide);
@@ -777,13 +914,13 @@ def keyline_layout(
         for radius, target in radii_targets:
             target[r0:r1, c0:c1] |= dist <= radius
 
-    def arm(x0, y0, side, mask):
+    def arm(x0, y0, side, mask, free_m=0.0):
         """Points of one arm from (x0, y0), cut where it is farthest from
         drainage (beyond that it would fall towards another drainage line),
         and how much farther from drainage its end is than its start."""
         pts = [(x0, y0)] + _walk(dem, transform, mask, x0, y0, grade, side, step,
                                  away=None if drain_tree is None else (cell_dist, DRAINAGE_APPROACH_M + 2 * cell),
-                                 flat=flat)
+                                 flat=flat, free_m=free_m)
         dist = drain_dist(pts)
         if dist is None:
             return pts, math.inf
@@ -888,8 +1025,8 @@ def keyline_layout(
                 heapq.heappush(heap, (float(cell_dist[rc_]), counter, x, y, gen))
 
     def keyline_from(kp):
-        plus, _ = arm(kp["x"], kp["y"], +1, trace_mask)
-        minus, _ = arm(kp["x"], kp["y"], -1, trace_mask)
+        plus, _ = arm(kp["x"], kp["y"], +1, trace_mask, KEYLINE_START_FREE_M)
+        minus, _ = arm(kp["x"], kp["y"], -1, trace_mask, KEYLINE_START_FREE_M)
         coords = oriented(minus, -1)[:-1] + oriented(plus, +1)
         return LineString(coords) if len(coords) >= 2 else None
 

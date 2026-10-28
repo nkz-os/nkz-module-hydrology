@@ -492,10 +492,40 @@ def _bunched(lines, spacing=12.0):
     return n
 
 
-def _hump(g, dem):
+def _prominence(z):
+    """Largest prominence of an interior local high of profile `z`: its
+    height above the higher of the lowest points between it and the nearest
+    higher point (or the line end) on each side."""
+    best = 0.0
+    inner = np.flatnonzero((z[1:-1] > z[:-2]) & (z[1:-1] >= z[2:])) + 1
+    for j in inner:
+        p = z[j]
+        cols = []
+        for side in (z[j + 1:], z[:j][::-1]):        # both neighbours are lower
+            higher = np.flatnonzero(side > p)
+            cols.append(side[:higher[0]].min() if len(higher) else side.min())
+        l_col, r_col = cols
+        best = max(best, float(p - max(l_col, r_col)))
+    return best
+
+
+def _counter_slope(g, dem):
+    """(largest interior-high prominence, largest climb above the lowest point
+    reached walking from the high end) of line `g` sampled every 0.1 m, and
+    the profile. The ruling: no line holds an interior high over 5 cm."""
     from app.services.keyline import _profile
-    _, z = _profile(g, dem, ~TF2, 0.25)
-    return float(z.max() - max(z[0], z[-1])), z
+    _, z = _profile(g, dem, ~TF2, 0.1)
+    walked = z if z[0] >= z[-1] else z[::-1]
+    climb = float((walked - np.minimum.accumulate(walked)).max())
+    return _prominence(z), climb, z
+
+
+def test_prominence_helper():
+    assert _prominence(np.array([5.0, 4, 3, 2, 1])) == 0.0
+    assert _prominence(np.array([5.0, 4, 3, 3.5, 3, 2])) == pytest.approx(0.5)
+    assert _prominence(np.array([5.0, 4, 3, 3.5, 3.2, 3.6, 2])) == pytest.approx(0.6)
+    assert _prominence(np.array([1.0, 2, 3, 2, 1])) == pytest.approx(2.0)
+    assert _prominence(np.array([3.0, 2, 1, 2, 3])) == 0.0         # highs at the ends only
 
 
 def test_layout_traces_spaced_lines_at_grade_on_a_plane():
@@ -580,8 +610,8 @@ def test_layout_spur_and_hollow_no_humps_no_fall_towards_drainage():
     drain = shapely.MultiPoint([TF2 @ (c + 0.5, r + 0.5) for r, c in np.argwhere(acc > 0)])
     assert len(lines) >= 5 and {g.centroid.x < TF2.c + 100 for g in lines} == {True, False}
     for g in lines:
-        hump, z = _hump(g, dem)
-        assert hump <= 0.05                      # no interior hump
+        prominence, climb, z = _counter_slope(g, dem)
+        assert prominence <= 0.05 and climb <= 0.05      # no hump, no counter-slope
         high, low = (g.coords[0], g.coords[-1]) if z[0] >= z[-1] else (g.coords[-1], g.coords[0])
         assert shapely.Point(low).distance(drain) >= shapely.Point(high).distance(drain) - 2.0
         assert g.length >= 50.0
@@ -616,15 +646,15 @@ def test_end_to_end_valley_to_layout():
 def test_falling_parts_splits_humps():
     """A line straight over a ridge rises then falls: it is split at the crest
     into two parts that each start high."""
-    from app.services.keyline import _falling_parts
+    from app.services.keyline import COUNTER_SLOPE_TOL_M, _falling_parts
     i, j = np.mgrid[0:N2, 0:N2].astype(float)
     dem = 100 - 0.01 * np.abs((j + 0.5) * 2.0 - 100)
     line = LineString([(TF2.c + 40, TF2.f - 101), (TF2.c + 160, TF2.f - 101)])
-    assert _hump(line, dem)[0] > 0.5
+    assert _counter_slope(line, dem)[0] > 0.5
     parts = _falling_parts(line, dem, TF2, lambda pts: None, 15.0)
     assert len(parts) == 2
     for g in parts:
-        assert _hump(g, dem)[0] <= 0.02
+        assert max(_counter_slope(g, dem)[:2]) <= COUNTER_SLOPE_TOL_M
         assert g.length == pytest.approx(60.0, abs=2.0)      # crest within a cell
 
 
@@ -640,3 +670,54 @@ def test_falling_parts_keeps_only_lines_falling_away_from_drainage():
     for g in (line, LineString(line.coords[::-1])):
         assert _falling_parts(g, away, TF2, to_drain, 15.0) == [g]
         assert _falling_parts(g, towards, TF2, to_drain, 15.0) == []
+
+
+def _rill(depth=0.8):
+    """200 m square falling 10 % to the south, crossed by a rill `depth` m
+    deep (Gaussian, 2 m wide) running down the slope at x = 100 m."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    x, y = (j + 0.5) * 2.0, (i + 0.5) * 2.0
+    return 100 - 0.1 * y - depth * np.exp(-((x - 100) / 2.0) ** 2)
+
+
+def test_trace_never_climbs_out_of_a_dip():
+    """A line traced across a rill drops into it; it must not climb back out
+    (the trace used to steer back up to its target, ~10 cm here): it ends at
+    the rill instead."""
+    from app.services.keyline import COUNTER_SLOPE_TOL_M, _walk
+    dem = _rill()
+    start = (TF2.c + 40, TF2.f - 101)
+    pts = _walk(dem, TF2, np.ones(dem.shape, bool), *start, 0.005, +1, 1.0)
+    line = LineString([start] + pts)
+    prominence, climb, _ = _counter_slope(line, dem)
+    assert line.length > 40                     # reaches the rill
+    assert prominence <= 0.05 and climb <= COUNTER_SLOPE_TOL_M + 0.005
+    assert max(x for x, _ in pts) < TF2.c + 105   # and stops in it
+
+
+def test_layout_lines_never_hold_a_counter_slope():
+    from app.services.keyline import MAX_LINE_GRADE, keyline_layout
+    dem = _rill()
+    res = keyline_layout(dem, TF2, np.ones(dem.shape, bool), PARCEL2, [], 12.0, min_line_m=50.0)
+    lines = [r["geometry"] for r in res["lines"] if r["direction"] == "line"]
+    assert len(lines) >= 10 and {g.centroid.x < TF2.c + 100 for g in lines} == {True, False}
+    for g in lines:
+        prominence, climb, _ = _counter_slope(g, dem)
+        assert prominence <= 0.05 and climb <= 0.05
+        assert g.length >= 50.0
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res["lines"])
+    assert _no_crossings(lines) and _bunched(lines) == 0
+
+
+def test_falling_parts_splits_at_the_bottom_of_a_dip():
+    """A straight line along the contour across the rill falls into it and
+    climbs out: it is split at the bottom into two parts without a
+    counter-slope."""
+    from app.services.keyline import COUNTER_SLOPE_TOL_M, _falling_parts
+    dem = _rill()
+    line = LineString([(TF2.c + 40, TF2.f - 101), (TF2.c + 160, TF2.f - 101)])
+    assert _counter_slope(line, dem)[1] > 0.5
+    parts = _falling_parts(line, dem, TF2, lambda pts: None, 15.0)
+    assert len(parts) == 2
+    for g in parts:
+        assert max(_counter_slope(g, dem)[:2]) <= COUNTER_SLOPE_TOL_M

@@ -439,8 +439,9 @@ def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
 
 
 def test_keyline_lines_optional_covers_parcel():
-    capped = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=1)
-    full = _call_keyline(_keyline_rasters(), _parcel_wgs())
+    # a 70 m parcel: lines down to 30 m (the 100 m default holds none here)
+    capped = _call_keyline(_keyline_rasters(), _parcel_wgs(), lines=1, min_line_m=30.0)
+    full = _call_keyline(_keyline_rasters(), _parcel_wgs(), min_line_m=30.0)
     assert full["request"]["lines"] is None
     assert len(full["parallel_lines"]) > len(capped["parallel_lines"])
 
