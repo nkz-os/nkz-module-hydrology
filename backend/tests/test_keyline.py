@@ -164,6 +164,7 @@ def test_walk_stays_on_valley_floor():
 
 # ---- Task 2: trace, parallels, clipping -----------------------------------
 
+import shapely
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon, box
 
 
@@ -172,7 +173,7 @@ def hillside():
     """120x120 valley running north-south, falling to the south, 1 m cells."""
     n = 120
     dem = np.fromfunction(
-        lambda i, j: 100 + abs(j - 60) * 0.1 + (1 - i / n) * 6, (n, n), dtype=np.float64
+        lambda i, j: 100 + (np.sqrt((j - 59.5) ** 2 + 9.0) - 3) * 0.1 + (1 - i / n) * 6, (n, n), dtype=np.float64
     )
     transform = from_origin(600000, 4700000, 1.0, 1.0)
     mask = np.ones((n, n), dtype=bool)
@@ -194,24 +195,30 @@ def test_keyline_crosses_slope_both_sides_and_stays_in_mask(hillside):
     for x, y in line.coords:
         c, r = inv @ (x, y)
         assert mask[int(r), int(c)]
-    # elevation falls ~grade per metre away from the valley on both ends
-    z0 = kp["z"]
-    for end in (line.coords[0], line.coords[-1]):
-        c, r = inv @ end
-        d = math.hypot(end[0] - kp["x"], end[1] - kp["y"])
-        assert dem[int(r), int(c)] < z0
-        assert abs((z0 - dem[int(r), int(c)]) / d - 0.005) < 0.003
+    # mean grade along the path length of each arm is within 10 % of the design grade
+    from app.services.keyline import _bilinear
+    def zat(p):
+        c, r = inv @ p
+        return _bilinear(dem, r - 0.5, c - 0.5)
+    kpt = Point(kp["x"], kp["y"])
+    s_kp = line.project(kpt)
+    assert 0 < s_kp < line.length
+    arm_a = line.length - s_kp
+    for end, arm in ((line.coords[0], s_kp), (line.coords[-1], arm_a)):
+        assert arm > 10
+        mean_grade = (zat((kp["x"], kp["y"])) - zat(end)) / arm
+        assert mean_grade == pytest.approx(0.005, rel=0.10)
     # left of travel is uphill (contract used by keyline_pattern)
-    left = line.offset_curve(3.0)
-    right = line.offset_curve(-3.0)
+    left = shapely.get_parts(line.offset_curve(3.0))
+    right = shapely.get_parts(line.offset_curve(-3.0))
     def mean_z(g):
         zs = []
-        for p in g.coords:
+        for p in shapely.get_coordinates(g):
             c, r = inv @ p
             if 0 <= int(r) < 120 and 0 <= int(c) < 120:
                 zs.append(dem[int(r), int(c)])
         return np.mean(zs)
-    assert mean_z(left) > mean_z(right)
+    assert np.mean([mean_z(g) for g in left]) > np.mean([mean_z(g) for g in right])
 
 
 def test_keyline_stops_at_mask_edge(hillside):
@@ -220,10 +227,42 @@ def test_keyline_stops_at_mask_edge(hillside):
     small = np.zeros_like(mask)
     small[50:70, 40:80] = True
     line = trace_keyline(dem, transform, kp, 0.005, small)
+    assert line.length > 0
     inv = ~transform
     for x, y in line.coords:
         c, r = inv @ (x, y)
         assert small[int(r), int(c)]
+    x0, y0 = transform @ (40, 70)
+    x1, y1 = transform @ (80, 50)
+    edge = box(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)).exterior
+    for end in (line.coords[0], line.coords[-1]):
+        assert edge.distance(Point(end)) <= 1.0 + 1e-6
+
+
+@pytest.fixture
+def crest():
+    """Slope falling 0.1 to the west that ends in a near-flat top (0.02) at column 80."""
+    n = 120
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    dem = 100 - 0.1 * np.minimum(j, 80.0) - 0.02 * np.maximum(j - 80.0, 0.0)
+    transform = from_origin(600000, 4700000, 1.0, 1.0)
+    x, y = transform @ (60.5, 60.5)
+    kp = {"row": 60, "col": 60, "x": float(x), "y": float(y),
+          "z": float(dem[60, 60]), "valley_cells": 60}
+    return dem, transform, np.ones((n, n), dtype=bool), kp
+
+
+def test_keyline_stops_at_ridge_crest(crest):
+    from app.services.keyline import trace_keyline
+    dem, transform, mask, kp = crest
+    # grade 0.05 on a 0.1 slope: the line drifts 20 m across to the flat top
+    line = trace_keyline(dem, transform, kp, 0.05, mask)
+    for end in (line.coords[0], line.coords[-1]):
+        # ends on the flat top (column 80) ...
+        assert end[0] - kp["x"] == pytest.approx(19.5, abs=2.0)
+        # ... not at the mask edge, 60 m away
+        assert 5 < (kp["y"] - end[1]) + 60 < 115
+    assert line.length > 40
 
 
 @pytest.fixture
@@ -239,10 +278,17 @@ def test_pattern_spacing_respected(arc):
     from app.services.keyline import keyline_pattern
     parcel = box(0, 0, 200, 220)
     res = keyline_pattern([arc], 12.0, parcel)
-    ups = sorted((r for r in res if r["direction"] == "up"), key=lambda r: r["offset_m"])
-    assert len(ups) >= 3
-    for a, b in zip(ups, ups[1:]):
-        assert a["geometry"].distance(b["geometry"]) == pytest.approx(12.0, rel=0.01)
+    ups = sorted((r for r in res if r["direction"] in ("keyline", "up")),
+                 key=lambda r: r["offset_m"])
+    downs = sorted((r for r in res if r["direction"] in ("keyline", "down")),
+                   key=lambda r: -r["offset_m"])
+    assert len(ups) >= 4 and len(downs) >= 4
+    for side in (ups, downs):
+        for a, b in zip(side, side[1:]):
+            assert a["geometry"].distance(b["geometry"]) == pytest.approx(12.0, rel=0.01)
+    assert [r["direction"] for r in res].count("keyline") == 1
+    assert all(r["offset_m"] > 0 for r in res if r["direction"] == "up")
+    assert all(r["offset_m"] < 0 for r in res if r["direction"] == "down")
     offs = sorted(r["offset_m"] for r in res)
     assert offs[0] < 0 < offs[-1] and 0.0 in offs
     assert all(r["grade"] == 0.005 for r in res)
@@ -278,7 +324,8 @@ def test_pattern_drops_short_segments(arc):
     assert keyline_pattern([arc], 10.0, corner) == []
     # max_lines per side
     capped = keyline_pattern([arc], 10.0, parcel, max_lines=2)
-    assert len(capped) <= 5
+    assert len(capped) == 5
+    assert sorted(r["offset_m"] for r in capped) == [-20.0, -10.0, 0.0, 10.0, 20.0]
 
 
 def test_pattern_respects_holes_and_multipolygon(arc):
@@ -300,3 +347,24 @@ def test_pattern_respects_holes_and_multipolygon(arc):
         assert g.intersection(gap).is_empty
     xs = [g.centroid.x for g in _lines(res2)]
     assert min(xs) < 80 and max(xs) > 120
+
+
+def test_end_to_end_valley_to_pattern():
+    from app.services.keyline import detect_keypoints, keyline_pattern, trace_keyline
+    dem = _valley_dem()
+    mask = np.ones((80, 80), bool)
+    kps = detect_keypoints(dem, TF, _accum(80, (40,), (80,)), mask)
+    assert kps
+    line = trace_keyline(dem, TF, kps[0], 0.005, mask)
+    assert line.length > 10
+    x0, y0 = TF @ (0, 80)
+    x1, y1 = TF @ (80, 0)
+    parcel = box(x0 + 5, y0 + 5, x1 - 5, y1 - 5)
+    res = keyline_pattern([line], 6.0, parcel)
+    assert len(res) >= 3
+    lines = _lines(res)
+    for g in lines:
+        assert g.difference(parcel.buffer(1e-6)).is_empty
+    for i in range(len(lines)):
+        for j in range(i + 1, len(lines)):
+            assert not lines[i].intersects(lines[j])

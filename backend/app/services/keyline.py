@@ -273,6 +273,11 @@ def _bilinear(dem: np.ndarray, r: float, c: float) -> float:
     return float(top * (1 - fr) + bot * fr)
 
 
+def _z_at(dem, inv, x, y):
+    c, r = inv @ (x, y)
+    return _bilinear(dem, r - 0.5, c - 0.5)
+
+
 def _gradient(dem, inv, a, e, x, y, h):
     """(dz/dx, dz/dy) in world units by central differences of the bilinear surface."""
     def z(px, py):
@@ -288,6 +293,8 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step):
     pts = []
     x, y = x0, y0
     prev = None
+    z0 = _z_at(dem, inv, x0, y0)
+    travelled = 0.0
     for _ in range(int(4 * (ny + nx) * abs(transform.a) / step) + 10):
         gx, gy = _gradient(dem, inv, transform.a, transform.e, x, y, step)
         g = math.hypot(gx, gy)
@@ -301,7 +308,10 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step):
             tx, ty = side * tx, side * ty
         elif tx * prev[0] + ty * prev[1] < 0:
             tx, ty = -tx, -ty
-        s = min(1.0, grade / g)               # dz/ds = -g * sin(alpha) = -grade
+        # Steer to the target elevation z0 - grade * length, not just to the
+        # local slope, so that discretisation errors do not accumulate.
+        need = (_z_at(dem, inv, x, y) - (z0 - grade * (travelled + step))) / (step * g)
+        s = max(-1.0, min(1.0, need))         # dz/ds = -g * sin(alpha)
         ca = math.sqrt(1 - s * s)
         dx, dy = ca * tx + s * ux, ca * ty + s * uy
         nxp, nyp = x + step * dx, y + step * dy
@@ -310,6 +320,7 @@ def _walk(dem, transform, mask, x0, y0, grade, side, step):
         if not (0 <= ri < ny and 0 <= ci < nx) or not mask[ri, ci]:
             break
         pts.append((nxp, nyp))
+        travelled += step
         prev = (dx, dy)
         x, y = nxp, nyp
     return pts
@@ -378,12 +389,11 @@ def keyline_pattern(
 
     out = []
     for _, _, k, line in candidates:
-        kept_before = list(out)  # only lines from earlier candidates can veto
         for piece in shapely.get_parts(line.intersection(parcel_utm)):
             if piece.geom_type != "LineString" or piece.length < min_segment_m:
                 continue
-            if any(piece.intersects(o["geometry"]) for o in kept_before):
+            if any(piece.intersects(o["geometry"]) for o in out):
                 continue
             out.append({"geometry": piece, "offset_m": float(k * spacing_m),
-                        "direction": "up" if k >= 0 else "down", "grade": grade})
+                        "direction": "keyline" if k == 0 else ("up" if k > 0 else "down"), "grade": grade})
     return out
