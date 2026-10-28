@@ -265,109 +265,8 @@ def test_keyline_stops_at_ridge_crest(crest):
     assert line.length > 40
 
 
-@pytest.fixture
-def arc():
-    return LineString([(0, 100), (50, 110), (100, 112), (150, 108), (200, 98)])
-
-
 def _lines(result):
     return [r["geometry"] for r in result]
-
-
-def test_pattern_spacing_respected(arc):
-    from app.services.keyline import keyline_pattern
-    parcel = box(0, 0, 200, 220)
-    res = keyline_pattern([arc], 12.0, parcel)
-    ups = sorted((r for r in res if r["direction"] in ("keyline", "up")),
-                 key=lambda r: r["offset_m"])
-    downs = sorted((r for r in res if r["direction"] in ("keyline", "down")),
-                   key=lambda r: -r["offset_m"])
-    assert len(ups) >= 4 and len(downs) >= 4
-    for side in (ups, downs):
-        for a, b in zip(side, side[1:]):
-            assert a["geometry"].distance(b["geometry"]) == pytest.approx(12.0, rel=0.01)
-    assert [r["direction"] for r in res].count("keyline") == 1
-    assert all(r["offset_m"] > 0 for r in res if r["direction"] == "up")
-    assert all(r["offset_m"] < 0 for r in res if r["direction"] == "down")
-    offs = sorted(r["offset_m"] for r in res)
-    assert offs[0] < 0 < offs[-1] and 0.0 in offs
-    assert all(r["grade"] == 0.005 for r in res)
-
-
-def test_pattern_lines_inside_parcel(arc):
-    from app.services.keyline import keyline_pattern
-    parcel = Polygon([(10, 20), (190, 30), (170, 200), (20, 190)])
-    res = keyline_pattern([arc], 10.0, parcel)
-    total = sum(g.length for g in _lines(res))
-    inside = sum(g.intersection(parcel.buffer(1e-6)).length for g in _lines(res))
-    assert total > 0 and inside / total == pytest.approx(1.0)
-
-
-def test_pattern_no_crossings(arc):
-    from app.services.keyline import keyline_pattern
-    other = LineString([(0, 60), (100, 140), (200, 70)])
-    res = keyline_pattern([arc, other], 9.0, box(0, 0, 200, 220))
-    lines = _lines(res)
-    for i in range(len(lines)):
-        for j in range(i + 1, len(lines)):
-            assert not lines[i].intersects(lines[j])
-    assert res[0]["geometry"].equals(arc.intersection(box(0, 0, 200, 220)))
-
-
-def test_pattern_drops_short_segments(arc):
-    from app.services.keyline import MIN_SEGMENT_M, keyline_pattern
-    parcel = box(0, 0, 200, 220)
-    res = keyline_pattern([arc], 10.0, parcel)
-    assert all(g.length >= MIN_SEGMENT_M for g in _lines(res))
-    # a parcel corner that leaves only a tiny piece of a line gives nothing
-    corner = box(0, 99, 3, 101)
-    assert keyline_pattern([arc], 10.0, corner) == []
-    # max_lines per side
-    capped = keyline_pattern([arc], 10.0, parcel, max_lines=2)
-    assert len(capped) == 5
-    assert sorted(r["offset_m"] for r in capped) == [-20.0, -10.0, 0.0, 10.0, 20.0]
-
-
-def test_pattern_respects_holes_and_multipolygon(arc):
-    from app.services.keyline import keyline_pattern
-    hole = box(70, 80, 130, 140)
-    holed = Polygon(box(0, 0, 200, 220).exterior.coords, [hole.exterior.coords])
-    res = keyline_pattern([arc], 8.0, holed)
-    assert res
-    for g in _lines(res):
-        assert g.intersection(hole.buffer(-1e-6)).is_empty
-        assert g.length >= 1
-    assert any(g.distance(hole) < 1e-6 for g in _lines(res))
-
-    a, b = box(0, 0, 80, 220), box(120, 0, 200, 220)
-    multi = MultiPolygon([a, b])
-    res2 = keyline_pattern([arc], 8.0, multi)
-    gap = box(80.001, 0, 119.999, 220)
-    for g in _lines(res2):
-        assert g.intersection(gap).is_empty
-    xs = [g.centroid.x for g in _lines(res2)]
-    assert min(xs) < 80 and max(xs) > 120
-
-
-def test_end_to_end_valley_to_pattern():
-    from app.services.keyline import detect_keypoints, keyline_pattern, trace_keyline
-    dem = _valley_dem()
-    mask = np.ones((80, 80), bool)
-    kps = detect_keypoints(dem, TF, _accum(80, (40,), (80,)), mask)
-    assert kps
-    line = trace_keyline(dem, TF, kps[0], 0.005, mask)
-    assert line.length > 10
-    x0, y0 = TF @ (0, 80)
-    x1, y1 = TF @ (80, 0)
-    parcel = box(x0 + 5, y0 + 5, x1 - 5, y1 - 5)
-    res = keyline_pattern([line], 6.0, parcel)
-    assert len(res) >= 3
-    lines = _lines(res)
-    for g in lines:
-        assert g.difference(parcel.buffer(1e-6)).is_empty
-    for i in range(len(lines)):
-        for j in range(i + 1, len(lines)):
-            assert not lines[i].intersects(lines[j])
 
 
 # ---- Real-terrain rework: nodata, flat valley floors, analysis grid, coverage ----
@@ -504,36 +403,159 @@ def test_keyline_ends_where_slope_reverses():
     assert min(xs) < 5
 
 
-def test_pattern_covers_parcel_beyond_short_keyline():
+def test_analysis_grid_with_cell_not_dividing_2m():
+    """0.75 m cells: block factor round(2 / 0.75) = 3, so the grid is 2.25 m."""
+    from app.services.keyline import analysis_grid
+    n = 100
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    dem = 100 - 0.75 * (0.05 * i + 0.02 * j)
+    acc = np.zeros((n, n))
+    acc[:, 50] = np.arange(n) + 1.0
+    tf = from_origin(600000, 4700000, 0.75, 0.75)
+    d, a, t = analysis_grid(dem, tf, acc)
+    assert t.a == pytest.approx(2.25) and t.e == pytest.approx(-2.25) and (t.c, t.f) == (tf.c, tf.f)
+    assert d.shape == (34, 34)                  # 100 / 3 rounded up, edge blocks partial
+    assert d[0, 0] == pytest.approx(dem[0:3, 0:3].mean())
+    assert d[33, 33] == pytest.approx(dem[99, 99])      # 1-cell edge block
+    assert a.max() == pytest.approx(100 / 9)
+
+
+# ---- Owner rule: lines within 1.5 % over 20 m, new guides where parallels drift ----
+
+TF2 = from_origin(600000, 4700000, 2.0, 2.0)
+N2 = 100
+
+
+def _kp2(dem, row, col):
+    x, y = TF2 @ (col + 0.5, row + 0.5)
+    return {"row": row, "col": col, "x": float(x), "y": float(y), "z": float(dem[row, col])}
+
+
+def _plane():
+    """200 m square on 2 m cells, falling 5 % to the south."""
+    i = np.arange(N2)[:, None].astype(float)
+    return np.repeat(100 - 0.05 * 2.0 * i, N2, axis=1)
+
+
+def _fan():
+    """Slope rising from 3 % in the west to 11 % in the east: the contours fan
+    out, so true parallels of a contour line drift off grade."""
+    i, j = np.mgrid[0:N2, 0:N2].astype(float)
+    return 100 - (0.03 + 0.0004 * 2.0 * j) * 2.0 * i
+
+
+PARCEL2 = box(600003.3, 4699803.3, 600196.7, 4699996.7)
+
+
+def _layout(dem, parcel=PARCEL2, kp=(50, 50), **kw):
+    from app.services.keyline import keyline_layout
+    return keyline_layout(dem, TF2, np.ones(dem.shape, bool), parcel, [_kp2(dem, *kp)], 12.0, **kw)
+
+
+def _no_crossings(lines):
+    tree = shapely.STRtree(lines)
+    return not any(a < b for a, b in zip(*tree.query(lines, predicate="intersects")))
+
+
+def _coverage(lines, parcel, spacing=12.0):
     from shapely.ops import unary_union
-    from app.services.keyline import keyline_pattern
-    parcel = box(0, 0, 200, 200)
-    short = LineString([(90, 100), (100, 103), (110, 100)])
-    res = keyline_pattern([short], 10.0, parcel)
+    return unary_union([g.buffer(spacing / 2) for g in lines]).intersection(parcel).area / parcel.area
+
+
+def test_layout_parallels_follow_the_keyline_on_a_plane():
+    from app.services.keyline import MAX_LINE_GRADE
+    res = _layout(_plane())
+    assert [r["direction"] for r in res].count("keyline") == 1
+    own = [r for r in res if r["guide"] == 0]
+    for side in (lambda r: r["offset_m"] >= 0, lambda r: r["offset_m"] <= 0):
+        chain = sorted((r for r in own if side(r)), key=lambda r: abs(r["offset_m"]))
+        assert len(chain) >= 5
+        for a, b in zip(chain, chain[1:]):
+            assert a["geometry"].distance(b["geometry"]) == pytest.approx(12.0, rel=0.01)
+    assert all(r["offset_m"] > 0 for r in own if r["direction"] == "up")
+    assert all(r["offset_m"] < 0 for r in own if r["direction"] == "down")
+    for r in own:                               # measured, not the design value
+        assert 0.003 < r["grade"] < 0.006 and r["max_grade_20m"] <= MAX_LINE_GRADE
     lines = _lines(res)
-    covered = unary_union([g.buffer(5.0) for g in lines]).intersection(parcel).area / parcel.area
-    assert covered > 0.95
+    assert _no_crossings(lines)
+    assert _coverage(lines, PARCEL2) > 0.95
+    assert all(g.difference(PARCEL2.buffer(1e-6)).is_empty for g in lines)
+
+
+def test_layout_max_lines_draws_no_new_guides():
+    from app.services.keyline import MIN_SEGMENT_M
+    res = _layout(_plane(), max_lines=2)
+    assert {r["direction"] for r in res} <= {"keyline", "up", "down"}
+    assert {r["offset_m"] for r in res} <= {-24.0, -12.0, 0.0, 12.0, 24.0}
+    assert all(r["geometry"].length >= MIN_SEGMENT_M for r in res)
+
+
+def test_layout_respects_holes_and_multipolygon():
+    hole = box(600070, 4699870, 600130, 4699930)
+    holed = Polygon(PARCEL2.exterior.coords, [hole.exterior.coords])
+    res = _layout(_plane(), parcel=holed, kp=(20, 50))
+    assert res
+    for g in _lines(res):
+        assert g.intersection(hole.buffer(-1e-6)).is_empty
+    multi = MultiPolygon([box(600003.3, 4699803.3, 600080, 4699996.7),
+                          box(600120, 4699803.3, 600196.7, 4699996.7)])
+    res2 = _layout(_plane(), parcel=multi, kp=(50, 20))
+    gap = box(600080.001, 4699800, 600119.999, 4700000)
+    assert res2 and all(g.intersection(gap).is_empty for g in _lines(res2))
+    assert max(g.centroid.x for g in _lines(res2)) > 600120
+
+
+def test_layout_seeds_new_guides_where_parallels_exceed_the_cap():
+    from app.services.keyline import MAX_LINE_GRADE, line_grade
+    fan = _fan()
+    res = _layout(fan)
+    guides = [r for r in res if r["direction"] == "guide"]
+    assert guides
+    for r in res:
+        mean, worst = line_grade(r["geometry"], fan, TF2)
+        assert worst <= MAX_LINE_GRADE
+        assert (mean, worst) == pytest.approx((r["grade"], r["max_grade_20m"]))
+    lines = _lines(res)
+    assert _no_crossings(lines)
+    full = _coverage(lines, PARCEL2)
+    # parallels of the keyline alone (no new guides) stop where they drift
+    alone = _coverage(_lines(_layout(fan, max_lines=100)), PARCEL2)
+    assert full > 0.9 and full > alone + 0.2
+
+
+def test_layout_caps_line_grade_on_steepening_ground():
+    """True parallels of the keyline would fall more than the cap at some
+    offsets: those stretches are left out, nothing above the cap is drawn."""
+    from app.services.keyline import MAX_LINE_GRADE, line_grade
+    fan = _fan()
+    res = _layout(fan, max_lines=100)
+    assert all(line_grade(g, fan, TF2)[1] <= MAX_LINE_GRADE for g in _lines(res))
+    # the same parallels on a plane cover the parcel; on the fan the cap
+    # removed the stretches that drifted off grade
+    assert _coverage(_lines(_layout(_plane(), max_lines=100)), PARCEL2) > 0.95
+    assert _coverage(_lines(res), PARCEL2) < 0.8
+
+
+def test_layout_never_crosses_unfilled_nodata():
+    dem = _plane()
+    dem[40:60, 20:40] = np.nan
+    footprint = box(600040, 4699880, 600080, 4699920)
+    res = _layout(dem)
+    lines = _lines(res)
+    assert lines and not any(g.intersects(footprint) for g in lines)
+    assert _coverage(lines, PARCEL2.difference(footprint)) > 0.85
+
+
+def test_end_to_end_valley_to_layout():
+    from app.services.keyline import MAX_LINE_GRADE, detect_keypoints, keyline_layout
+    dem, acc, tf = _fine_valley(cell=2.0, furrow=0.0)
+    mask = np.ones(dem.shape, bool)
+    kps = detect_keypoints(dem, tf, acc, mask)
+    parcel = box(tf.c + 5, tf.f - 155, tf.c + 155, tf.f - 5)
+    res = keyline_layout(dem, tf, mask, parcel, kps, 12.0)
+    assert any(r["direction"] == "keyline" for r in res)
+    lines = _lines(res)
+    assert _no_crossings(lines)
     assert all(g.difference(parcel.buffer(1e-6)).is_empty for g in lines)
-    ext = [r for r in res if r["direction"] == "extension"]
-    assert len(ext) == 2 and all(r["offset_m"] == 0.0 for r in ext)
-    for i in range(len(lines)):
-        for j in range(i + 1, len(lines)):
-            assert not lines[i].intersects(lines[j])
-
-
-def test_pattern_cuts_crossing_patterns_at_a_seam():
-    from app.services.keyline import keyline_pattern
-    parcel = box(0, 0, 200, 200)
-    a = LineString([(0, 60), (200, 80)])
-    b = LineString([(60, 0), (80, 200)])
-    res = keyline_pattern([a, b], 10.0, parcel)
-    assert {r["keyline"] for r in res} == {0, 1}
-    by = {0: [r["geometry"] for r in res if r["keyline"] == 0],
-          1: [r["geometry"] for r in res if r["keyline"] == 1]}
-    assert len(by[1]) > 5                       # cut back, not dropped
-    lines = _lines(res)
-    for i in range(len(lines)):
-        for j in range(i + 1, len(lines)):
-            assert not lines[i].intersects(lines[j])
-    for g in by[1]:
-        assert min(g.distance(h) for h in by[0]) >= 5.0 - 1e-6
+    assert all(r["max_grade_20m"] <= MAX_LINE_GRADE for r in res)
+    assert _coverage(lines, parcel) > 0.8

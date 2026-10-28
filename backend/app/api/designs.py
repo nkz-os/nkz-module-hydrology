@@ -28,7 +28,7 @@ from app.services.design_generator import (
 from app.services.gpx_export import geometry_to_gpx, geometry_to_kml
 from app.services.hydro_record import nkz_attr
 from app.services.keyline import (
-    analysis_grid, detect_keyline, detect_keypoints, keyline_pattern, trace_keyline,
+    MAX_LINE_GRADE, analysis_grid, detect_keyline, detect_keypoints, keyline_layout,
 )
 from app.services.pond_score import pond_score
 from app.services.works_design import swale_capacity, check_dam_spacing, check_dam_sediment_retention
@@ -157,41 +157,42 @@ def generate_keyline(
     if not kps:
         return {"status": "no_keypoint", "detail": "No keypoint found in this parcel"}
 
-    keylines = [trace_keyline(dem_arr, transform, kp, req.grade, parcel_mask) for kp in kps]
-    pattern = keyline_pattern(
-        keylines, req.spacing, parcel_utm, max_lines=req.lines, grade=req.grade,
+    layout = keyline_layout(
+        dem_arr, transform, parcel_mask, parcel_utm, kps, req.spacing,
+        grade=req.grade, max_lines=req.lines,
     )
 
     def _line_wgs(g) -> dict:
         return {"type": "LineString", "coordinates": _to_wgs84([list(c) for c in g.coords], crs)}
 
+    def _metrics(p) -> dict:
+        return {"grade": round(p["grade"], 5), "max_grade_20m": round(p["max_grade_20m"], 5)}
+
     keypoints = [
         {"type": "Point", "coordinates": _to_wgs84([kp["x"], kp["y"], kp["z"]], crs)}
         for kp in kps
     ]
-    # The pattern clips every line to the polygon and cuts lines of different
-    # valleys apart; keylines are its "keyline" entries, grouped by valley.
-    per_valley = [[p["geometry"] for p in pattern if p["direction"] == "keyline" and p["keyline"] == i]
+    # Keylines are the layout's "keyline" entries, grouped by valley; every
+    # line carries the grade measured on the terrain (see keyline_layout).
+    per_valley = [[p for p in layout if p["direction"] == "keyline" and p["valley"] == i]
                   for i in range(len(kps))]
-    keyline_geoms = [_line_wgs(x) for pcs in per_valley for x in pcs]
-    main_pieces = per_valley[0]
-    main_keyline = _line_wgs(max(main_pieces, key=lambda x: x.length)) if main_pieces else None
+    keyline_entries = [p for pcs in per_valley for p in pcs]
+    main = max(per_valley[0], key=lambda p: p["geometry"].length) if per_valley[0] else None
     parallels = [
-        {
-            "geometry": _line_wgs(p["geometry"]),
-            "grade": p["grade"],
-            "direction": p["direction"],
-            "offset_m": p["offset_m"],
-        }
-        for p in pattern
+        {"geometry": _line_wgs(p["geometry"]), "direction": p["direction"],
+         "offset_m": p["offset_m"], **_metrics(p)}
+        for p in layout
         if p["direction"] != "keyline"
     ]
     return {
         "keypoint": keypoints[0],
-        "keyline": main_keyline,
+        "keyline": _line_wgs(main["geometry"]) if main else None,
+        "keyline_metrics": _metrics(main) if main else None,
         "keypoints": keypoints,
-        "keylines": keyline_geoms,
+        "keylines": [_line_wgs(p["geometry"]) for p in keyline_entries],
+        "keylines_metrics": [_metrics(p) for p in keyline_entries],
         "parallel_lines": parallels,
+        "max_line_grade": MAX_LINE_GRADE,
         "request": req.model_dump(),
         "status": "ok",
     }

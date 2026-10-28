@@ -378,7 +378,9 @@ def _keyline_rasters(cell=1.0, size=80, flat=False):
     i = np.arange(size)[:, None].astype(float)
     j = np.arange(size)[None, :].astype(float)
     floor = np.where(i <= 40, 120 - 0.5 * i, 100 - 0.05 * (i - 40))
-    dem = np.full((size, size), 100.0) if flat else floor + 0.5 * np.abs(j - 40)
+    # rounded valley floor (a sharp V cannot hold a keyline within the 1.5 %
+    # line grade cap: the trace hugs the steep sides)
+    dem = np.full((size, size), 100.0) if flat else floor + 0.15 * (np.sqrt((j - 40) ** 2 + 9.0) - 3)
     acc = np.zeros((size, size))
     if not flat:
         for r in range(size):
@@ -425,10 +427,13 @@ def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
     assert len(res["keypoints"]) == 1 and len(res["keylines"]) == 1
     assert res["keypoints"][0] == res["keypoint"]
     assert res["parallel_lines"]
+    assert len(res["keylines_metrics"]) == len(res["keylines"])
+    assert set(res["keyline_metrics"]) == {"grade", "max_grade_20m"}
     for p in res["parallel_lines"]:
-        assert set(p) == {"geometry", "grade", "direction", "offset_m"}
-        assert p["direction"] in ("up", "down", "extension")
+        assert set(p) == {"geometry", "grade", "max_grade_20m", "direction", "offset_m"}
+        assert p["direction"] in ("up", "down", "guide")
         assert p["geometry"]["type"] == "LineString"
+        assert 0 <= p["grade"] <= p["max_grade_20m"] <= res["max_line_grade"] == 0.015
     assert res["request"]["lines"] == 2
 
 
@@ -545,7 +550,7 @@ def _utm(geom):
 
 
 def test_keyline_with_nodata_gaps_inside_parcel():
-    from shapely.geometry import shape
+    from shapely.geometry import box, shape
     from shapely.ops import unary_union
     rasters = _valley_rasters(1.0, nodata_boxes=[
         (77, 150, 83, 156),     # on the valley floor near the outlet
@@ -569,7 +574,10 @@ def test_keyline_with_nodata_gaps_inside_parcel():
     lines = [_utm(g) for g in geoms]
     area = _utm(parcel)
     covered = unary_union([g.buffer(3.0) for g in lines]).intersection(area).area / area.area
-    assert covered > 0.9
+    assert covered > 0.8
+    # nothing over the part of the strip the fill cannot reach (> 20 m from data)
+    unfilled = box(600000, 4699840, 600015, 4700000)
+    assert not any(g.intersects(unfilled) for g in lines)
 
 
 def test_keyline_on_fine_dem_with_furrows():
