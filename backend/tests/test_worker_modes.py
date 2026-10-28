@@ -139,7 +139,10 @@ def test_retention_mode_publishes_retention_fields():
     for gone in ("peakFlowM3s", "sedimentYieldTonnes", "pondViability"):
         assert f"nkz:{gone}" not in record
     for name in ("retentionStoredM3", "retentionSummerDays",
-                 "retentionDryStoredM3", "retentionDrySummerDays", "runoffMm"):
+                 "retentionDryStoredM3", "retentionDrySummerDays", "runoffMm",
+                 "retentionExtraStoredM3", "retentionExtraSummerDays",
+                 "retentionBaselineSummerDays", "retentionDryExtraStoredM3",
+                 "retentionDryExtraSummerDays", "retentionDryBaselineSummerDays"):
         assert f"nkz:{name}" in record, name
     assert "nkz:peakFlowM3s" not in record
 

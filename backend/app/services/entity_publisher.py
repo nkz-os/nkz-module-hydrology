@@ -56,6 +56,12 @@ _RECORD_METRICS: dict[str, str] = {
     "retentionSummerDays": "nkz:retentionSummerDays",
     "retentionDryStoredM3": "nkz:retentionDryStoredM3",
     "retentionDrySummerDays": "nkz:retentionDrySummerDays",
+    "retentionExtraStoredM3": "nkz:retentionExtraStoredM3",
+    "retentionExtraSummerDays": "nkz:retentionExtraSummerDays",
+    "retentionBaselineSummerDays": "nkz:retentionBaselineSummerDays",
+    "retentionDryExtraStoredM3": "nkz:retentionDryExtraStoredM3",
+    "retentionDryExtraSummerDays": "nkz:retentionDryExtraSummerDays",
+    "retentionDryBaselineSummerDays": "nkz:retentionDryBaselineSummerDays",
 }
 
 _DEM_SOURCES = {"lidar", "pnoa", "ign", "copernicus", "synthetic"}

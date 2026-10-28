@@ -492,6 +492,14 @@ def _design_inputs(
                 "retentionSummerDays": res.median.summer_days_above_threshold,
                 "retentionDryStoredM3": res.dry.stored_m3,
                 "retentionDrySummerDays": res.dry.summer_days_above_threshold,
+                "retentionExtraStoredM3": res.median.extra_m3_vs_baseline,
+                "retentionExtraSummerDays": res.median.extra_days_vs_baseline,
+                "retentionBaselineSummerDays": (
+                    res.median.summer_days_above_threshold - res.median.extra_days_vs_baseline),
+                "retentionDryExtraStoredM3": res.dry.extra_m3_vs_baseline,
+                "retentionDryExtraSummerDays": res.dry.extra_days_vs_baseline,
+                "retentionDryBaselineSummerDays": (
+                    res.dry.summer_days_above_threshold - res.dry.extra_days_vs_baseline),
             })
             out["season_runoff_mm"] = res.median.season_runoff_mm
     except _DesignNotAvailable as exc:

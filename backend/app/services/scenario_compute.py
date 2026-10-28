@@ -63,6 +63,10 @@ def fetch_parcel_designs(orion, parcel_id: str) -> list[dict]:
         return []
 
 
+def _int_or_none(v: float | None) -> int | None:
+    return None if v is None else int(v)
+
+
 def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
     """Compute baseline vs intervention scenarios on demand."""
     orion = SyncOrionClient(tenant_id)
@@ -70,9 +74,14 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
     if not record:
         return {"status": "no_data"}
 
-    mode = nkz_attr(record, "calculationMode")
-    if mode not in ("storm", "retention"):
+    raw_mode = nkz_attr(record, "calculationMode")
+    if raw_mode is None:
         mode = None  # published before calculation modes: legacy event path
+    elif raw_mode in ("storm", "retention"):
+        mode = raw_mode
+    else:
+        return {"status": "not_available", "mode": None, "returnPeriodYears": None,
+                "reason": f"unknown calculation mode: {raw_mode}"}
 
     if nkz_attr(record, "designRainStatus") == "not_available":
         return {
@@ -83,20 +92,23 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
         }
 
     if mode == "retention":
+        def _year(prefix: str) -> dict:
+            return {
+                "extraStoredM3": num_attr(nkz_attr(record, f"retention{prefix}ExtraStoredM3")),
+                "extraSummerDays": num_attr(nkz_attr(record, f"retention{prefix}ExtraSummerDays")),
+                "baselineSummerDays": num_attr(
+                    nkz_attr(record, f"retention{prefix}BaselineSummerDays")),
+            }
+
+        median, dry = _year(""), _year("Dry")
+        if any(v is None for y in (median, dry) for v in y.values()):
+            return {"status": "not_available", "mode": "retention", "returnPeriodYears": None,
+                    "reason": "retention figures missing from the record"}
         return {
             "status": "ok",
             "mode": "retention",
             "returnPeriodYears": None,
-            "retention": {
-                "median": {
-                    "storedM3": num_attr(nkz_attr(record, "retentionStoredM3")),
-                    "summerDays": num_attr(nkz_attr(record, "retentionSummerDays")),
-                },
-                "dry": {
-                    "storedM3": num_attr(nkz_attr(record, "retentionDryStoredM3")),
-                    "summerDays": num_attr(nkz_attr(record, "retentionDrySummerDays")),
-                },
-            },
+            "retention": {"median": median, "dry": dry},
         }
 
     area_ha = num_attr(nkz_attr(record, "parcelAreaHa")) or 0.0
@@ -126,9 +138,8 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
     return {
         "status": "ok",
         "mode": mode,
-        "returnPeriodYears": (
-            num_attr(nkz_attr(record, "returnPeriodYears")) if mode == "storm" else None
-        ),
+        "returnPeriodYears": _int_or_none(
+            num_attr(nkz_attr(record, "returnPeriodYears"))) if mode == "storm" else None,
         "baseline": vars(baseline),
         "intervention": vars(intervention),
         "comparison": compare_scenarios({"baseline": baseline, "intervention": intervention}),

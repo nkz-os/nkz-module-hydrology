@@ -82,6 +82,7 @@ def test_storm_scenario_uses_design_runoff():
     assert r["status"] == "ok"
     assert r["mode"] == "storm"
     assert r["returnPeriodYears"] == 25
+    assert isinstance(r["returnPeriodYears"], int)
     # 20 mm * 10 ha = 2000 m3 reference; 1000 captured.
     assert r["intervention"]["water_captured_m3"] == 1000.0
     assert abs(r["intervention"]["sediment_retained_t"] - 2.5) < 1e-6
@@ -89,14 +90,31 @@ def test_storm_scenario_uses_design_runoff():
 
 def test_retention_scenario_reports_m3_and_days():
     rec = _record(**{"nkz:calculationMode": "retention", "nkz:designRainStatus": "ok",
-                     "nkz:retentionStoredM3": 800.0, "nkz:retentionSummerDays": 12,
-                     "nkz:retentionDryStoredM3": 500.0, "nkz:retentionDrySummerDays": 7})
+                     "nkz:retentionExtraStoredM3": 800.0, "nkz:retentionExtraSummerDays": 12,
+                     "nkz:retentionBaselineSummerDays": 30,
+                     "nkz:retentionDryExtraStoredM3": 500.0,
+                     "nkz:retentionDryExtraSummerDays": 7,
+                     "nkz:retentionDryBaselineSummerDays": 20})
     r = _run(rec)
     assert r["status"] == "ok"
     assert r["mode"] == "retention"
     assert r["returnPeriodYears"] is None
-    assert r["retention"]["median"] == {"storedM3": 800.0, "summerDays": 12.0}
-    assert r["retention"]["dry"] == {"storedM3": 500.0, "summerDays": 7.0}
+    assert r["retention"]["median"] == {
+        "extraStoredM3": 800.0, "extraSummerDays": 12.0, "baselineSummerDays": 30.0}
+    assert r["retention"]["dry"] == {
+        "extraStoredM3": 500.0, "extraSummerDays": 7.0, "baselineSummerDays": 20.0}
+
+
+def test_retention_missing_figures_is_not_available():
+    r = _run(_record(**{"nkz:calculationMode": "retention", "nkz:designRainStatus": "ok"}))
+    assert r["status"] == "not_available"
+    assert r["reason"]
+
+
+def test_unknown_mode_is_not_available():
+    r = _run(_record(**{"nkz:calculationMode": "bogus"}))
+    assert r["status"] == "not_available"
+    assert "bogus" in r["reason"]
 
 
 def test_design_rain_not_available_is_not_zeros():
