@@ -43,6 +43,14 @@ class ParcelWeather:
     fidelity: str                     # "parcel_weather" | "unavailable"
 
 
+@dataclass(frozen=True)
+class DailyWater:
+    """One day of rain and ET0 from weather-api (None where the series has a gap)."""
+    day: date
+    precip_mm: float | None
+    et0_mm: float | None
+
+
 # Default metrics requested from weather-map /stats endpoint.
 _DEFAULT_METRICS = "temperature_avg,temperature_min,eto,soil_moisture"
 
@@ -157,6 +165,47 @@ class WeatherClient:
         if not rows:
             raise WeatherUnavailable(f"weather-api: no daily row for {day.isoformat()}")
         return rows[0].get("precip_mm"), rows[0].get("et0_mm")
+
+    def fetch_daily_history(
+        self, parcel_id: str, tenant_id: str, first_year: int, last_year: int,
+    ) -> list[DailyWater]:
+        """Daily rain and ET0 for ``first_year``..``last_year``, one request per year.
+
+        One request per calendar year keeps each under weather-api's 400-day limit.
+        A year that fails is skipped and logged.
+
+        Raises:
+            WeatherUnavailable: only when every year failed.
+        """
+        short = parcel_id.rsplit(":", 1)[-1]
+        url = f"{self._daily}/api/weather/parcel/{short}/daily"
+        out: list[DailyWater] = []
+        failed = 0
+        years = list(range(first_year, last_year + 1))
+        for year in years:
+            params = {"start": f"{year}-01-01", "end": f"{year}-12-31", "fill": "open_meteo"}
+            try:
+                resp = httpx.get(url, params=params, headers=self._headers(tenant_id), timeout=self._timeout)
+                if resp.status_code != 200:
+                    raise WeatherUnavailable(f"weather-api {resp.status_code}: {resp.text[:200]}")
+                rows = (resp.json() or {}).get("days") or []
+                year_days = [
+                    DailyWater(
+                        date.fromisoformat(str(r["date"])[:10]),
+                        None if r.get("precip_mm") is None else float(r["precip_mm"]),
+                        None if r.get("et0_mm") is None else float(r["et0_mm"]),
+                    )
+                    for r in rows
+                ]
+            except (httpx.HTTPError, WeatherUnavailable, ValueError, KeyError, TypeError) as exc:
+                failed += 1
+                logger.warning("daily history skipped year=%s tenant=%s parcel=%s: %s",
+                               year, tenant_id, short, exc)
+                continue
+            out.extend(year_days)
+        if years and failed == len(years):
+            raise WeatherUnavailable(f"weather-api: daily history failed for all {failed} years")
+        return out
 
     # ── forecast ──────────────────────────────────────────────────────────
 
