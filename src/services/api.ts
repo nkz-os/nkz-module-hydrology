@@ -102,19 +102,28 @@ export interface KeylineRequest {
   parcel_id: string;
   grade: number;
   spacing: number;
-  lines: number;
+  /** Omitted or null covers the whole parcel. */
+  lines?: number | null;
 }
 
+export type KeylineStatus = 'ok' | 'no_data' | 'no_keypoint' | 'terrain_too_coarse';
+
 export interface KeylineResponse {
-  keypoint: { type: 'Point'; coordinates: number[] };
-  keyline: { type: 'LineString'; coordinates: number[][] };
-  parallel_lines: Array<{
+  status: KeylineStatus;
+  keypoint: { type: 'Point'; coordinates: number[] } | null;
+  keyline: { type: 'LineString'; coordinates: number[][] } | null;
+  keypoints?: Array<{ type: 'Point'; coordinates: number[] }>;
+  keylines?: Array<{ type: 'LineString'; coordinates: number[][] }>;
+  parallel_lines?: Array<{
     geometry: { type: 'LineString'; coordinates: number[][] };
     grade: number;
     direction: 'up' | 'down';
+    offset_m?: number;
   }>;
-  request: KeylineRequest;
-  status: string;
+  request?: KeylineRequest;
+  /** Present when status is terrain_too_coarse. */
+  cell_size_m?: number;
+  max_cell_size_m?: number;
 }
 
 export interface PondScoreRequest {
