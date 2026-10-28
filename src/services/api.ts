@@ -349,6 +349,9 @@ export const api = {
 
   // Design generation
   generateKeyline: (req: KeylineRequest) => post<KeylineResponse>('/design/keyline/generate', req),
+  // Background layout: poll getJob(job_id); a finished job's result is a KeylineResponse.
+  startKeylineJob: (req: KeylineRequest) =>
+    post<{ job_id: string; status: string }>('/design/keyline/jobs', req),
   scorePond: (req: PondScoreRequest) => post<PondScoreResponse>('/design/pond/score', req),
   suggestSwales: (req: SwaleSuggestRequest) => post('/design/swale/suggest', req),
   suggestCheckDams: (req: CheckDamSuggestRequest) => post('/design/check-dam/suggest', req),

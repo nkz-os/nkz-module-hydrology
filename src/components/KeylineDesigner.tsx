@@ -1,11 +1,17 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../services/api';
 import { useHydrologyLayerContext } from '../services/layerContext';
+import type { KeylineResponse } from '../services/api';
 import type { DesignGeometry } from '../services/layerStore';
 import ExportMenu from './ExportMenu';
 
 interface Props { parcelId: string; }
+
+// The layout runs in the worker; the job may wait behind a DEM analysis.
+const POLL_INTERVAL_MS = 2000;
+const POLL_MAX_MS = 10 * 60 * 1000;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   const { t } = useTranslation();
@@ -23,6 +29,9 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
   // Parameters of the last generation: a save stores the values its lines
   // were generated with, not what the inputs hold now.
   const [sentParams, setSentParams] = useState<{ grade: number; spacing: number; lines: number | null; min_line_m: number } | null>(null);
+  // Bumped on unmount and on every new generation: a stale poll stops.
+  const runRef = useRef(0);
+  useEffect(() => () => { runRef.current += 1; }, []);
 
   // Empty = no limit (null); 0 = the keylines only; n = n rows of lines out from them.
   const linesValue = lines.trim() === '' || !(Number(lines) >= 0) ? null : Math.floor(Number(lines));
@@ -38,6 +47,7 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
           max: result.max_cell_size_m ?? 5,
         });
       case 'no_data': return t('hydrology:keylineNoData');
+      case 'orion_unavailable': return t('hydrology:keylineError');
       default: return null;
     }
   };
@@ -56,8 +66,20 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
     setResult(null);
     setSentParams(null);
     const params = { grade: grade / 100, spacing, lines: linesValue, min_line_m: minLineValue };
+    const run = ++runRef.current;
     try {
-      const res = await api.generateKeyline({ parcel_id: parcelId, ...params });
+      const { job_id } = await api.startKeylineJob({ parcel_id: parcelId, ...params });
+      const deadline = Date.now() + POLL_MAX_MS;
+      let res: KeylineResponse | null = null;
+      while (!res) {
+        await sleep(POLL_INTERVAL_MS);
+        if (run !== runRef.current) return;
+        if (Date.now() > deadline) throw new Error('keyline job timed out');
+        const job = await api.getJob(job_id);
+        if (job.status === 'failed') throw new Error('keyline job failed');
+        if (job.status === 'finished') res = job.result as KeylineResponse;
+      }
+      if (run !== runRef.current) return;
       setResult(res);
       setSentParams(params);
 
@@ -85,11 +107,12 @@ const KeylineDesigner: React.FC<Props> = ({ parcelId }) => {
       setDesigns(geoms);
       setDesignsVisible(true);
     } catch (e) {
+      if (run !== runRef.current) return;
       console.error('Keyline generation failed:', e);
       setDesigns([]);
       setError(true);
     } finally {
-      setLoading(false);
+      if (run === runRef.current) setLoading(false);
     }
   };
 
