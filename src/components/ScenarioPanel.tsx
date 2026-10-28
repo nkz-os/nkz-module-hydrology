@@ -33,7 +33,7 @@ const ScenarioPanel: React.FC<Props> = ({ parcelId, refreshKey }) => {
   if (loading) return <p className="text-nkz-muted text-sm">{t('hydrology:loading')}</p>;
   if (data?.status === 'not_available') {
     return (
-      <p className="text-amber-500 text-xs">
+      <p className="text-nkz-warning-strong text-xs">
         {t('hydrology:scenarioNotAvailable', { reason: data.reason ?? '-' })}
       </p>
     );
@@ -54,9 +54,9 @@ const ScenarioPanel: React.FC<Props> = ({ parcelId, refreshKey }) => {
         <table className="w-full">
           <thead>
             <tr className="text-nkz-muted">
-              <th className="text-left font-normal">{t('hydrology:scenarioMetric')}</th>
+              <th className="text-left">{t('hydrology:scenarioMetric')}</th>
               {ry.map((c) => (
-                <th key={c.key} className="text-right font-normal">{t(`hydrology:${c.key}`)}</th>
+                <th key={c.key} className="text-right">{t(`hydrology:${c.key}`)}</th>
               ))}
             </tr>
           </thead>

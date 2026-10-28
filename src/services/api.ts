@@ -20,6 +20,15 @@ function authHeaders(extra?: Record<string, string>): Record<string, string> {
   };
 }
 
+/** HTTP failure carrying the status, so callers can tell 403 from 422. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`HTTP ${status}`);
+    this.status = status;
+  }
+}
+
 async function get<T>(path: string): Promise<T> {
   const resp = await fetch(`${HYDRO_BASE}${path}`, { headers: authHeaders(), credentials: 'include' });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -44,7 +53,7 @@ async function put<T>(path: string, body: unknown): Promise<T> {
     body: JSON.stringify(body),
     credentials: 'include',
   });
-  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  if (!resp.ok) throw new ApiError(resp.status);
   return resp.json();
 }
 

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@nekazari/sdk';
-import { api, CalculationMode, DesignInfo, ParcelSettings, ReturnPeriod } from '../services/api';
+import { api, ApiError, CalculationMode, DesignInfo, ParcelSettings, ReturnPeriod } from '../services/api';
 
 const WRITE_ROLES = ['TechnicalConsultant', 'TenantAdmin', 'PlatformAdmin'];
 const RETURN_PERIODS: ReturnPeriod[] = [10, 25, 100];
@@ -20,62 +20,66 @@ const CalculationModeControl: React.FC<Props> = ({ parcelId, onRerun, analysisRu
   const canEdit = hasAnyRole(WRITE_ROLES);
   const [settings, setSettings] = useState<ParcelSettings | null>(null);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState(false);
+  const [error, setError] = useState<'load' | 'forbidden' | 'invalid' | 'save' | null>(null);
   const [offerRerun, setOfferRerun] = useState(false);
 
   useEffect(() => {
     setSettings(null);
     setOfferRerun(false);
-    setError(false);
+    setError(null);
     if (!parcelId) return;
     let live = true;
-    api.getSettings(parcelId).then((s) => live && setSettings(s)).catch(() => live && setError(true));
+    api.getSettings(parcelId).then((s) => live && setSettings(s)).catch(() => live && setError('load'));
     return () => { live = false; };
   }, [parcelId]);
 
   const save = useCallback(async (mode: CalculationMode, period: ReturnPeriod) => {
     setSaving(true);
-    setError(false);
+    setError(null);
     try {
       setSettings(await api.putSettings(parcelId, mode, period));
       setOfferRerun(true);
-    } catch {
-      setError(true);
+    } catch (e) {
+      const status = e instanceof ApiError ? e.status : 0;
+      setError(status === 403 ? 'forbidden' : status === 422 ? 'invalid' : 'save');
     } finally {
       setSaving(false);
     }
   }, [parcelId]);
 
-  if (!settings) {
-    return error ? <p className="text-xs text-red-500 mb-2">{t('hydrology:modeSaveFailed')}</p> : null;
-  }
+  if (!settings && error !== 'load') return null;
+  // GET failed: show the defaults (marked as such) next to the error.
+  const shown: ParcelSettings = settings ?? { mode: 'storm', return_period_years: 10, is_default: true };
 
   const disabled = !canEdit || saving;
+  const errorKey = {
+    load: 'modeLoadFailed', forbidden: 'modeForbidden', invalid: 'modeInvalid', save: 'modeSaveFailed',
+  };
   return (
     <div className="mb-3 pb-3 border-b border-nkz-border text-xs">
       <div className="flex items-center justify-between gap-2 mb-1">
         <span className="font-semibold text-nkz-text-primary">{t('hydrology:modeTitle')}</span>
-        {settings.is_default && <span className="text-[10px] text-nkz-muted">{t('hydrology:modeDefault')}</span>}
+        {shown.is_default && <span className="text-[10px] text-nkz-muted">{t('hydrology:modeDefault')}</span>}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <select
           className="bg-nkz-surface border border-nkz-border rounded px-1 py-0.5 text-nkz-text-primary disabled:opacity-60"
           aria-label={t('hydrology:modeTitle')}
-          value={settings.mode}
+          value={shown.mode}
           disabled={disabled}
-          onChange={(e) => save(e.target.value as CalculationMode, settings.return_period_years)}
+          onChange={(e) => save(e.target.value as CalculationMode, shown.return_period_years)}
         >
           {MODES.map((m) => (
             <option key={m} value={m}>{t(m === 'storm' ? 'hydrology:modeStorm' : 'hydrology:modeRetention')}</option>
           ))}
         </select>
-        {settings.mode === 'storm' && (
+        {shown.mode === 'storm' && (
           <select
             className="bg-nkz-surface border border-nkz-border rounded px-1 py-0.5 text-nkz-text-primary disabled:opacity-60"
             aria-label={t('hydrology:returnPeriod')}
-            value={settings.return_period_years}
+            value={shown.return_period_years}
             disabled={disabled}
-            onChange={(e) => save(settings.mode, Number(e.target.value) as ReturnPeriod)}
+            onChange={(e) => save(shown.mode, Number(e.target.value) as ReturnPeriod)}
           >
             {RETURN_PERIODS.map((p) => (
               <option key={p} value={p}>{t('hydrology:returnPeriodYears', { years: p })}</option>
@@ -85,7 +89,7 @@ const CalculationModeControl: React.FC<Props> = ({ parcelId, onRerun, analysisRu
         {saving && <span className="text-nkz-muted">{t('hydrology:modeSaving')}</span>}
       </div>
       {!canEdit && <p className="text-[10px] text-nkz-muted mt-1">{t('hydrology:modeReadOnly')}</p>}
-      {error && <p className="text-red-500 mt-1">{t('hydrology:modeSaveFailed')}</p>}
+      {error && <p className="text-nkz-danger mt-1">{t(`hydrology:${errorKey[error]}`)}</p>}
       {offerRerun && onRerun && (
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <span className="text-nkz-text-primary">{t('hydrology:modeRerunOffer')}</span>
@@ -112,7 +116,7 @@ export const DesignLabel: React.FC<{ design?: DesignInfo }> = ({ design }) => {
   const modeName = t(design.calculationMode === 'storm' ? 'hydrology:modeStorm' : 'hydrology:modeRetention');
   if (design.designRainStatus === 'not_available') {
     return (
-      <div className="text-[10px] text-amber-500 mb-2">
+      <div className="text-[10px] text-nkz-warning-strong mb-2">
         <span className="font-medium">{modeName}. </span>
         {design.designRainReason
           ? t('hydrology:designNotAvailable', { reason: design.designRainReason })
@@ -132,7 +136,7 @@ export const DesignLabel: React.FC<{ design?: DesignInfo }> = ({ design }) => {
           })
         : `${modeName}: ${t('hydrology:designTypicalYear')}`}
       {design.designRainLowConfidence && (
-        <div className="text-amber-500">
+        <div className="text-nkz-warning-strong">
           {t('hydrology:designLowConfidence', {
             low: design.designRainCiLowMm != null ? Math.round(design.designRainCiLowMm) : '-',
             high: design.designRainCiHighMm != null ? Math.round(design.designRainCiHighMm) : '-',
