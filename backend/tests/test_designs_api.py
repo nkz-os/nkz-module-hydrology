@@ -427,7 +427,7 @@ def test_keyline_response_keeps_legacy_fields_and_adds_arrays():
     assert res["parallel_lines"]
     for p in res["parallel_lines"]:
         assert set(p) == {"geometry", "grade", "direction", "offset_m"}
-        assert p["direction"] in ("up", "down")
+        assert p["direction"] in ("up", "down", "extension")
         assert p["geometry"]["type"] == "LineString"
     assert res["request"]["lines"] == 2
 
@@ -503,3 +503,78 @@ def test_keyline_request_rejects_invalid_inputs():
     for bad in ({"spacing": 0}, {"grade": -0.1}, {"lines": -1}):
         with pytest.raises(ValidationError):
             KeylineRequest(parcel_id="p-1", **bad)
+
+
+def _valley_rasters(cell, size_m=160.0, furrow=0.0, nodata_boxes=()):
+    """Valley falling south (slope break 80 m down) as GeoTIFFs tagged with
+    nodata=-9999; `nodata_boxes` are (x0, y0, x1, y1) metre boxes from the
+    top-left corner written as nodata in both rasters."""
+    import io
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    n = int(size_m / cell)
+    i, j = np.mgrid[0:n, 0:n].astype(float)
+    y, x = (i + 0.5) * cell, (j + 0.5) * cell
+    floor = np.where(y <= 80, 130 - 0.25 * y, 110 - 0.025 * (y - 80))
+    dem = floor + (np.sqrt((x - 80) ** 2 + 9.0) - 3) * 0.15 + furrow * np.sin(2 * np.pi * x)
+    acc = np.zeros((n, n))
+    acc[:, int(80 / cell)] = (np.arange(n) + 1) * 4.0
+    for x0, y0, x1, y1 in nodata_boxes:
+        sel = (x >= x0) & (x < x1) & (y >= y0) & (y < y1)
+        dem[sel] = -9999.0
+        acc[sel] = -9999.0
+    tf = from_origin(600000, 4700000, cell, cell)
+    out = {}
+    for name, arr in (("breached.tif", dem), ("accum.tif", acc)):
+        buf = io.BytesIO()
+        with rasterio.open(buf, "w", driver="GTiff", height=n, width=n, count=1, dtype="float32",
+                           crs="EPSG:25830", transform=tf, nodata=-9999.0) as dst:
+            dst.write(arr.astype("float32"), 1)
+        out[name] = buf.getvalue()
+    return out
+
+
+def _utm(geom):
+    from pyproj import Transformer
+    from shapely.geometry import shape
+    from shapely.ops import transform
+    t = Transformer.from_crs("EPSG:4326", "EPSG:25830", always_xy=True)
+    return transform(t.transform, shape(geom))
+
+
+def test_keyline_with_nodata_gaps_inside_parcel():
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+    rasters = _valley_rasters(1.0, nodata_boxes=[
+        (77, 150, 83, 156),     # on the valley floor near the outlet
+        (84, 100, 90, 106),     # on the path of the east arm of the keyline
+        (0, 0, 40, 160),        # a strip wider than the fill distance
+    ])
+    parcel = _parcel_wgs(size=160)
+    res = _call_keyline(rasters, parcel)
+    assert res["status"] == "ok"
+    kp = _utm(res["keypoint"])
+    assert 100 < res["keypoint"]["coordinates"][2] < 140      # a real elevation
+    assert abs(kp.x - 600080) <= 4 and abs(4700000 - kp.y - 80) <= 4
+    # the keyline crosses the slope on both sides of the valley (the gap on
+    # the east arm is filled, not a cliff the trace turns back from)
+    ends = [x - 600000 for x, _ in _utm(res["keyline"]).coords[::len(_utm(res["keyline"]).coords) - 1]]
+    assert min(ends) < 75 and max(ends) > 85
+    poly = shape(parcel).buffer(1e-6)
+    geoms = res["keylines"] + [p["geometry"] for p in res["parallel_lines"]]
+    for g in geoms:
+        assert poly.covers(shape(g))
+    lines = [_utm(g) for g in geoms]
+    area = _utm(parcel)
+    covered = unary_union([g.buffer(3.0) for g in lines]).intersection(area).area / area.area
+    assert covered > 0.9
+
+
+def test_keyline_on_fine_dem_with_furrows():
+    """0.5 m terrain with plough furrows: the trace runs on the analysis grid,
+    not on the furrows."""
+    res = _call_keyline(_valley_rasters(0.5, furrow=0.08), _parcel_wgs(size=160))
+    assert res["status"] == "ok"
+    assert _utm(res["keyline"]).length > 50
