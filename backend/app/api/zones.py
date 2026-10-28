@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from nkz_platform_sdk import SyncOrionClient, AuthContext
 
 from app.middleware import require_auth
+from app.services.hydro_record import nkz_attr
 
 logger = logging.getLogger(__name__)
 
@@ -40,15 +41,22 @@ def _record_date(entity: dict) -> str:
     return str(d or "")
 
 
-def _get_attr(entity: dict, name: str):
-    """Read a possibly nkz:-prefixed keyValues attribute, unwrapping a normalized
-    {type, value} dict if Orion did not compact to a scalar."""
-    for key in (f"nkz:{name}", name):
-        if key in entity:
-            v = entity[key]
-            if isinstance(v, dict):
-                v = v.get("value", v.get("@value"))
-            return v
+_get_attr = nkz_attr
+
+_ZONE_KPIS = (
+    "zoneId", "twiMean", "twiRange", "areaHa", "runoffMm", "peakFlowM3s",
+    "sedimentYieldTonnes", "soilSaturationPct", "pondViability", "keylineGrade",
+)
+
+
+def _is_hydrology_zone(entity: dict) -> bool:
+    """Zones this module wrote. Other modules (weather-map management zones) publish
+    AgriParcelZone on the same parcel; zones from before the zoneType tag are
+    recognised by their twi- id suffix."""
+    zone_type = nkz_attr(entity, "zoneType")
+    if zone_type is not None:
+        return zone_type == "hydrology"
+    return str(entity.get("id", "")).rsplit(":", 1)[-1].startswith("twi-")
     return None
 
 
@@ -66,24 +74,11 @@ def get_parcel_zones(
         )
         zones = []
         for e in entities:
+            if not _is_hydrology_zone(e):
+                continue
             zone: dict = {"id": e.get("id", ""), "type": e.get("type", "")}
-            for key in (
-                "nkz:zoneId",
-                "nkz:twiMean",
-                "nkz:twiRange",
-                "nkz:areaHa",
-                "nkz:runoffMm",
-                "nkz:peakFlowM3s",
-                "nkz:sedimentYieldTonnes",
-                "nkz:soilSaturationPct",
-                "nkz:pondViability",
-                "nkz:keylineGrade",
-            ):
-                val = e.get(key)
-                if isinstance(val, dict):
-                    zone[key.replace("nkz:", "")] = val.get("value")
-                else:
-                    zone[key.replace("nkz:", "")] = val
+            for name in _ZONE_KPIS:
+                zone[name] = nkz_attr(e, name)
             # Geometry (GeoProperty) so the viewer can render zone polygons.
             loc = e.get("location")
             if isinstance(loc, dict):

@@ -18,7 +18,7 @@ import logging
 
 from nkz_platform_sdk import SyncOrionClient
 
-from app.services.hydro_record import latest_hydro_record, num_attr
+from app.services.hydro_record import latest_hydro_record, nkz_attr, num_attr
 from app.services.scenario_engine import (
     simulate_baseline,
     simulate_intervention,
@@ -44,7 +44,7 @@ def _aggregate_design_capture(designs: list[dict]) -> tuple[float, int]:
     captured = 0.0
     count = 0
     for d in designs or []:
-        cap = num_attr(d.get("nkz:capacity"))
+        cap = num_attr(nkz_attr(d, "capacity"))
         if cap and cap > 0:
             captured += cap
             count += 1
@@ -58,12 +58,12 @@ def compute_scenarios(tenant_id: str, parcel_id: str) -> dict:
     if not record:
         return {"status": "no_data"}
 
-    area_ha = num_attr(record.get("nkz:parcelAreaHa")) or 0.0
+    area_ha = num_attr(nkz_attr(record, "parcelAreaHa")) or 0.0
     area_m2 = area_ha * 10_000.0
-    runoff_mm = num_attr(record.get("nkz:runoffMm")) or 0.0
-    sediment_t = num_attr(record.get("nkz:sedimentYieldTonnes")) or 0.0
-    eto_mm = num_attr(record.get("nkz:etoMm")) or 0.0
-    precip_mm = num_attr(record.get("nkz:precipitationMm")) or 0.0
+    runoff_mm = num_attr(nkz_attr(record, "runoffMm")) or 0.0
+    sediment_t = num_attr(nkz_attr(record, "sedimentYieldTonnes")) or 0.0
+    eto_mm = num_attr(nkz_attr(record, "etoMm")) or 0.0
+    precip_mm = num_attr(nkz_attr(record, "precipitationMm")) or 0.0
 
     runoff_m3 = runoff_mm / 1000.0 * area_m2
     et_m3 = eto_mm / 1000.0 * area_m2

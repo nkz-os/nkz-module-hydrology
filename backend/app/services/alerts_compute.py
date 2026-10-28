@@ -18,7 +18,7 @@ from __future__ import annotations
 from nkz_platform_sdk import SyncOrionClient
 
 from app.services.alerts import evaluate_alerts
-from app.services.hydro_record import latest_hydro_record, num_attr
+from app.services.hydro_record import latest_hydro_record, nkz_attr, num_attr
 
 _DEFAULT_NDVI = 0.5
 
@@ -30,10 +30,10 @@ def compute_alerts(tenant_id: str, parcel_id: str) -> dict:
     if not record:
         return {"status": "no_data"}
 
-    sat = num_attr(record.get("nkz:soilSaturationPct")) or 0.0
-    precip = num_attr(record.get("nkz:precipitationMm")) or 0.0
-    slope = num_attr(record.get("nkz:slopeMean")) or 0.0
-    ndvi = num_attr(record.get("nkz:ndvi")) or _DEFAULT_NDVI
+    sat = num_attr(nkz_attr(record, "soilSaturationPct")) or 0.0
+    precip = num_attr(nkz_attr(record, "precipitationMm")) or 0.0
+    slope = num_attr(nkz_attr(record, "slopeMean")) or 0.0
+    ndvi = num_attr(nkz_attr(record, "ndvi")) or _DEFAULT_NDVI
 
     alerts = evaluate_alerts(
         bucket_state={"saturation_pct": sat},
