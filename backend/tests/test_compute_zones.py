@@ -93,3 +93,21 @@ def test_compute_zones_twi_range_round_trips_through_zonal_stats():
         lo, hi = _parse_twi_range(z["twiRange"])  # raises on bad format
         assert lo < hi
     _ = slope  # slope raster unused here; parser contract is the point
+
+
+def test_compute_zones_geometry_stays_under_the_payload_budget():
+    # A speckled high-resolution TWI (LiDAR-like 0.5 m cells) polygonizes into
+    # thousands of rings; each zone must still fit one broker request.
+    import json
+
+    from app.workers.hydrology_worker import MAX_ZONE_GEOMETRY_BYTES
+
+    rng = np.random.default_rng(7)
+    grid = rng.normal(8.0, 2.0, size=(400, 400))
+    zones = _compute_zones({"twi.tif": _twi_tif(grid, pixel=0.5)})
+    assert len(zones) == 5
+    for z in zones:
+        assert z["geometry"].get("type") in ("Polygon", "MultiPolygon")
+        assert len(json.dumps(z["geometry"])) <= MAX_ZONE_GEOMETRY_BYTES
+        x, y = _first_xy(z["geometry"]["coordinates"])
+        assert round(x, 6) == x and round(y, 6) == y

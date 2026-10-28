@@ -484,6 +484,55 @@ def _stream_length_m(geojson_bytes: bytes) -> float:
     return total
 
 
+# One zone is published per broker request, and the broker refuses bodies over
+# 1 MB; a quarter of that leaves room for the attributes and keeps the layer light.
+MAX_ZONE_GEOMETRY_BYTES = 256 * 1024
+# 6 decimals of a degree is ~0.1 m, finer than any DEM cell used here.
+_COORD_DECIMALS = 6
+_MAX_SIMPLIFY_STEPS = 8
+
+
+def _round_coords(coords):
+    if isinstance(coords[0], (int, float)):
+        return [round(c, _COORD_DECIMALS) for c in coords]
+    return [_round_coords(c) for c in coords]
+
+
+def _bounded_zone_geometry(merged, crs, res_m: float, parcel_geometry: dict | None) -> dict:
+    """WGS84 geometry of a zone, clipped to the parcel, no larger than the budget.
+
+    The tolerance starts at one cell and doubles until the polygon fits; the zone
+    statistics come from the raster masks, so only the drawn outline coarsens.
+    Returns {} (zone kept, no outline) when even the coarsest outline is too big.
+    """
+    from rasterio.warp import transform_geom
+    from shapely.geometry import shape as shp_shape, mapping
+
+    tolerance = res_m
+    for _ in range(_MAX_SIMPLIFY_STEPS):
+        simplified = merged.simplify(tolerance=tolerance, preserve_topology=False)
+        if simplified.is_empty:
+            return {}
+        geometry = transform_geom(crs, "EPSG:4326", mapping(simplified))
+        # Clip to the parcel boundary so zones never bleed outside.
+        if parcel_geometry and geometry.get("type"):
+            try:
+                clipped = shp_shape(geometry).intersection(shp_shape(parcel_geometry))
+                if clipped.is_empty:
+                    return {}
+                if clipped.geom_type in ("Polygon", "MultiPolygon"):
+                    geometry = mapping(clipped)
+            except Exception:
+                pass
+        geometry = {"type": geometry["type"], "coordinates": _round_coords(geometry["coordinates"])}
+        if len(json.dumps(geometry)) <= MAX_ZONE_GEOMETRY_BYTES:
+            return geometry
+        tolerance *= 2
+    logger.warning("zone outline over %d bytes even at %.1f m tolerance; published without it",
+                   MAX_ZONE_GEOMETRY_BYTES, tolerance / 2)
+    return {}
+
+
 def _compute_zones(result: dict, parcel_geometry: dict | None = None) -> list[dict]:
     """5 TWI quintile zones WITH real polygon geometry.
 
@@ -496,8 +545,7 @@ def _compute_zones(result: dict, parcel_geometry: dict | None = None) -> list[di
     into the surrounding buffer.
     """
     from rasterio.features import shapes
-    from rasterio.warp import transform_geom
-    from shapely.geometry import shape as shp_shape, mapping
+    from shapely.geometry import shape as shp_shape
     from shapely.ops import unary_union
 
     with rasterio.open(io.BytesIO(result["twi.tif"])) as ds:
@@ -533,19 +581,7 @@ def _compute_zones(result: dict, parcel_geometry: dict | None = None) -> list[di
             if v == 1
         ]
         if polys:
-            merged = unary_union(polys).simplify(tolerance=res_m, preserve_topology=False)
-            if not merged.is_empty:
-                geometry = transform_geom(crs, "EPSG:4326", mapping(merged))
-                # Clip to the parcel boundary so zones never bleed outside.
-                if parcel_geometry and geometry.get("type"):
-                    try:
-                        clipped = shp_shape(geometry).intersection(shp_shape(parcel_geometry))
-                        if clipped.is_empty:
-                            geometry = {}
-                        elif clipped.geom_type in ("Polygon", "MultiPolygon"):
-                            geometry = mapping(clipped)
-                    except Exception:
-                        pass
+            geometry = _bounded_zone_geometry(unary_union(polys), crs, res_m, parcel_geometry)
         zones.append({
             "zone_id": lab,
             "geometry": geometry,
