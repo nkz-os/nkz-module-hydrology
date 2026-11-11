@@ -577,12 +577,18 @@ def _reproject_to_utm(grid: DEMGrid) -> bytes:
     """DEMGrid (EPSG:4258 degrees) -> UTM GeoTIFF bytes (metric cellsize)."""
     arr = np.array(grid.elevations, dtype="float32")
     # Row 0 is the north edge; origin_lat is the SOUTH edge of the grid.
-    north = grid.north_lat
-    if north is None:
-        north = grid.origin_lat + grid.pixel_size_deg * arr.shape[0]
+    # pixel_size_deg is the column width; eu-elevation rounds the row count
+    # separately, so with a declared north edge the rows span north - origin.
+    rows = arr.shape[0]
+    if grid.north_lat is not None:
+        north = grid.north_lat
+        row_height = (grid.north_lat - grid.origin_lat) / rows
+    else:
+        north = grid.origin_lat + grid.pixel_size_deg * rows
+        row_height = grid.pixel_size_deg
     transform = rasterio.transform.from_origin(
         grid.origin_lon, north,
-        grid.pixel_size_deg, grid.pixel_size_deg,
+        grid.pixel_size_deg, row_height,
     )
     buf = io.BytesIO()
     with rasterio.open(buf, "w", driver="GTiff", height=arr.shape[0],

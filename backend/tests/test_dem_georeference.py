@@ -40,3 +40,10 @@ def test_reprojected_dem_keeps_high_row_north():
 def test_declared_north_lat_wins():
     (_, _, _, north), _ = _bounds_and_rows(_reproject_to_utm(_grid(north_lat=42.0102)))
     assert north == pytest.approx(42.0102, abs=0.0002)
+
+
+def test_rows_span_declared_bounds():
+    """pixel_size_deg is the column width; with north_lat the rows span north_lat-origin_lat."""
+    (_, south, _, north), _ = _bounds_and_rows(_reproject_to_utm(_grid(north_lat=42.012)))
+    assert south == pytest.approx(42.0, abs=0.0005)
+    assert north == pytest.approx(42.012, abs=0.0005)
