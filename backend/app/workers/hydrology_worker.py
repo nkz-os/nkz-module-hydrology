@@ -576,8 +576,12 @@ def _bbox_with_buffer(geometry: dict, resolution_m: float, cells: int = 2) -> tu
 def _reproject_to_utm(grid: DEMGrid) -> bytes:
     """DEMGrid (EPSG:4258 degrees) -> UTM GeoTIFF bytes (metric cellsize)."""
     arr = np.array(grid.elevations, dtype="float32")
+    # Row 0 is the north edge; origin_lat is the SOUTH edge of the grid.
+    north = grid.north_lat
+    if north is None:
+        north = grid.origin_lat + grid.pixel_size_deg * arr.shape[0]
     transform = rasterio.transform.from_origin(
-        grid.origin_lon, grid.origin_lat,
+        grid.origin_lon, north,
         grid.pixel_size_deg, grid.pixel_size_deg,
     )
     buf = io.BytesIO()
