@@ -33,6 +33,9 @@ class DEMGrid:
     cols: int
     rows: int
     source: dict[str, Any]
+    # Row 0 is the NORTH edge; origin_lat is the south edge. eu-elevation
+    # declares the north edge since it publishes ``row_order``.
+    north_lat: float | None = None
 
 
 def resolution_for_area_ha(area_ha: float) -> float:
@@ -80,4 +83,5 @@ class DEMClient:
             origin_lon=d["origin_lon"], origin_lat=d["origin_lat"],
             pixel_size_deg=d["pixel_size_deg"], cols=d["cols"], rows=d["rows"],
             source=d.get("source", {}),
+            north_lat=d.get("north_lat"),
         )
